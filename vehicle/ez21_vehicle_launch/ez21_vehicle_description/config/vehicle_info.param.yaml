@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    wheel_radius: 0.2545 # Derived from the centered wheel STL radius in ez12_urdf.
+    wheel_width: 0.3279 # Average tire width derived from the wheel STL extents.
+    wheel_base: 1.1399 # Average front axle position minus rear axle position.
+    wheel_tread: 0.5584 # Average of front/rear left-right wheel center spacing.
+    front_overhang: 0.3187 # Front body bound minus front axle x position.
+    rear_overhang: 0.4217 # Rear axle x position minus rear body bound.
+    left_overhang: 0.2144 # Left body bound minus average left wheel center y.
+    right_overhang: 0.2154 # Average right wheel center y minus right body bound.
+    vehicle_height: 0.8006 # Ground-to-top height from the body STL and base_link height.
+    max_steer_angle: 0.70 # Placeholder; ez12_urdf does not encode a steering range.

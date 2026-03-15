@@ -1,0 +1,7 @@
+ez21_vehicle_interface:
+  ros__parameters:
+    vehicle_id: "default"
+    input_qos_depth: 1
+    use_actuation_command: false
+    log_received_messages: false
+    control_mode_request_default_success: true
