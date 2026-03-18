@@ -2,8 +2,20 @@
 <launch>
   <arg name="vehicle_id" default="$(env VEHICLE_ID default)"/>
   <arg
+    name="raw_vehicle_cmd_converter_param_path"
+    default="$(find-pkg-share autoware_raw_vehicle_cmd_converter)/config/raw_vehicle_cmd_converter.param.yaml"/>
+  <arg name="initial_engage_state" default="false"/>
+  <arg
     name="config_file"
     default="$(find-pkg-share ez21_vehicle_launch)/config/vehicle_interface.param.yaml"/>
+
+  <include file="$(find-pkg-share autoware_raw_vehicle_cmd_converter)/launch/raw_vehicle_converter.launch.xml">
+    <arg name="config_file" value="$(var raw_vehicle_cmd_converter_param_path)"/>
+    <arg name="input_control_cmd" value="/control/command/control_cmd"/>
+    <arg name="input_odometry" value="/localization/kinematic_state"/>
+    <arg name="input_steering" value="/vehicle/status/steering_status"/>
+    <arg name="output_actuation_cmd" value="/control/command/actuation_cmd"/>
+  </include>
 
   <node
     pkg="ez21_vehicle_launch"
@@ -19,5 +31,9 @@
     <remap from="input/turn_indicators_cmd" to="/control/command/turn_indicators_cmd"/>
     <remap from="input/hazard_lights_cmd" to="/control/command/hazard_lights_cmd"/>
     <remap from="input/control_mode_request" to="/control/control_mode_request"/>
+    <remap from="output/velocity_status" to="/vehicle/status/velocity_status"/>
+    <remap from="output/steering_status" to="/vehicle/status/steering_status"/>
+    <remap from="output/gear_status" to="/vehicle/status/gear_status"/>
+    <remap from="output/control_mode" to="/vehicle/status/control_mode"/>
   </node>
 </launch>

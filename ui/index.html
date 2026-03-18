@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Autoware 运行时控制</title>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAP6mOp2PxMDAl0nh-fmKEyWYZ1qdpzf7U&callback=initMap" async defer onerror="handleGoogleMapsLoadError()"></script>
+  <script>
+    var map;
+    var marker;
+    var pathPoints = [];
+    var polyline;
+    var startPointLabel;
+    var endPointLabel;
+    var settingPath = false;
+    var liveAutowareMapName = 'autoware_init_map';
+    var socket;
+    var historicalPathPoints = [];
+    var historicalPolyline;
+    var autowareStatusTimer = null;
+    var googleMapsLoaded = false;
+
+    function uiServerCommand() {
+      return 'bash /media/nvidia/program/autoware.ez21/src/launcher/autoware_launch_ez21/ui/start_ui_server.sh 127.0.0.1 8090 false';
+    }
+
+    function reportStartupIssue(message) {
+      if (!document.getElementById('map-status') || !document.getElementById('runtime-status')) {
+        window.setTimeout(function() {
+          reportStartupIssue(message);
+        }, 100);
+        return;
+      }
+
+      setMapStatus(message, true);
+      setRuntimeStatus('推荐先运行: ' + uiServerCommand() + ' ，再访问 http://127.0.0.1:8090/index.html', true);
+    }
+
+    function handleGoogleMapsLoadError() {
+      reportStartupIssue('Google Maps 加载失败，请确认当前机器能访问 maps.googleapis.com，并优先通过本地 UI server 打开页面。');
+    }
+
+    function initMap() {
+      googleMapsLoaded = true;
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: {lat: 39.8606, lng: 116.2012},
+        zoom: 19,
+        mapTypeId: 'satellite'
+      });
+
+      map.addListener('click', function(event) {
+        if (settingPath) {
+          addPathPoint(event.latLng);
+        }
+      });
+
+      map.addListener('rightclick', function() {
+        if (settingPath) {
+          displayPathPoints();
+        }
+      });
+    }
+
+    function addPathPoint(latLng) {
+      pathPoints.push(latLng);
+
+      if (polyline) {
+        polyline.setMap(null);
+      }
+      if (startPointLabel) {
+        startPointLabel.setMap(null);
+      }
+      if (endPointLabel) {
+        endPointLabel.setMap(null);
+      }
+
+      polyline = new google.maps.Polyline({
+        path: pathPoints,
+        geodesic: true,
+        strokeColor: '#FF0000',
+        strokeOpacity: 1.0,
+        strokeWeight: 2
+      });
+      polyline.setMap(map);
+
+      startPointLabel = new google.maps.Marker({
+        position: pathPoints[0],
+        label: '起点',
+        map: map
+      });
+
+      endPointLabel = new google.maps.Marker({
+        position: pathPoints[pathPoints.length - 1],
+        label: '终点',
+        map: map
+      });
+
+      displayPathPoints();
+    }
+
+    function clearPathPreview() {
+      pathPoints = [];
+
+      if (polyline) {
+        polyline.setMap(null);
+        polyline = null;
+      }
+      if (startPointLabel) {
+        startPointLabel.setMap(null);
+        startPointLabel = null;
+      }
+      if (endPointLabel) {
+        endPointLabel.setMap(null);
+        endPointLabel = null;
+      }
+
+      displayPathPoints();
+    }
+
+    function displayPathPoints() {
+      var pathPointsDiv = document.getElementById('path-points');
+      pathPointsDiv.innerHTML = '';
+
+      if (pathPoints.length === 0) {
+        pathPointsDiv.textContent = '尚未选择路径点';
+        return;
+      }
+
+      for (var i = 0; i < pathPoints.length; i++) {
+        var point = pathPoints[i];
+        pathPointsDiv.innerHTML += '点' + (i + 1) + ': 纬度 ' + point.lat().toFixed(6) + ' 经度 ' + point.lng().toFixed(6) + '<br>';
+      }
+    }
+
+    function connectWebSocket() {
+      socket = new WebSocket('ws://127.0.0.1:8080');
+
+      socket.onopen = function() {
+        console.log('WebSocket connection opened.');
+      };
+
+      socket.onmessage = function(event) {
+        var data = JSON.parse(event.data);
+        var deviceStatusId = data.device_status_id;
+
+        var x = parseFloat(data.pose.position.x);
+        var y = parseFloat(data.pose.position.y);
+        var z = parseFloat(data.pose.position.z);
+        var roll = parseFloat(data.pose.orientation.roll);
+        var pitch = parseFloat(data.pose.orientation.pitch);
+        var yaw = parseFloat(data.pose.orientation.yaw);
+        var linearX = parseFloat(data.twist.linear.x);
+        var linearY = parseFloat(data.twist.linear.y);
+        var linearZ = parseFloat(data.twist.linear.z);
+        var angularX = parseFloat(data.twist.angular.x);
+        var angularY = parseFloat(data.twist.angular.y);
+        var angularZ = parseFloat(data.twist.angular.z);
+        var rot = -(yaw - Math.PI / 2) * 180 / Math.PI;
+        if (rot < 0) {
+          rot += 360;
+        }
+
+        var robotSymbol = {
+          path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+          scale: 5,
+          strokeColor: '#FF0000',
+          fillColor: '#FF0000',
+          fillOpacity: 1,
+          rotation: rot
+        };
+
+        var lat = parseFloat(data.pose.position.latitude);
+        var lng = parseFloat(data.pose.position.longitude);
+        var alt = parseFloat(data.pose.position.altitude);
+
+        document.getElementById('latitude').textContent = '纬度: ' + lat;
+        document.getElementById('longitude').textContent = '经度: ' + lng;
+        document.getElementById('altitude').textContent = '海拔: ' + alt;
+        document.getElementById('position-x').textContent = '位置X: ' + x;
+        document.getElementById('position-y').textContent = '位置Y: ' + y;
+        document.getElementById('position-z').textContent = '位置Z: ' + z;
+        document.getElementById('orientation-roll').textContent = '朝向滚动: ' + roll;
+        document.getElementById('orientation-pitch').textContent = '朝向俯仰: ' + pitch;
+        document.getElementById('orientation-yaw').textContent = '朝向偏航: ' + yaw;
+        document.getElementById('linear-x').textContent = '线性速度X: ' + linearX;
+        document.getElementById('linear-y').textContent = '线性速度Y: ' + linearY;
+        document.getElementById('linear-z').textContent = '线性速度Z: ' + linearZ;
+        document.getElementById('angular-x').textContent = '角速度X: ' + angularX;
+        document.getElementById('angular-y').textContent = '角速度Y: ' + angularY;
+        document.getElementById('angular-z').textContent = '角速度Z: ' + angularZ;
+        document.getElementById('device-status-id').textContent = '设备状态ID: ' + deviceStatusId;
+
+        if (!isNaN(lat) && !isNaN(lng)) {
+          var newPosition = {lat: lat, lng: lng};
+          historicalPathPoints.push(newPosition);
+
+          if (historicalPolyline) {
+            historicalPolyline.setMap(null);
+          }
+          historicalPolyline = new google.maps.Polyline({
+            path: historicalPathPoints,
+            geodesic: true,
+            strokeColor: '#00FF00',
+            strokeOpacity: 0.5,
+            strokeWeight: 2
+          });
+          historicalPolyline.setMap(map);
+
+          if (marker) {
+            marker.setPosition(newPosition);
+            marker.setIcon(robotSymbol);
+          } else {
+            marker = new google.maps.Marker({
+              position: newPosition,
+              icon: robotSymbol,
+              map: map
+            });
+          }
+        }
+      };
+
+      socket.onclose = function() {
+        console.log('WebSocket connection closed.');
+        setTimeout(function() {
+          console.log('Attempting to reconnect...');
+          connectWebSocket();
+        }, 5000);
+      };
+    }
+
+    function moveToLatestLocation() {
+      if (!marker) {
+        setMapStatus('还没有收到机器人位置，无法居中显示。', true);
+        return;
+      }
+
+      map.setCenter(marker.getPosition());
+      map.setZoom(18);
+
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        setMapStatus('位置已居中，但 websocket 未连接，无法发送 GPS 初始化命令。', true);
+        return;
+      }
+
+      socket.send(JSON.stringify({"command": "Gps Initial"}));
+      setMapStatus('已居中显示当前位置，并通过 websocket 发送 GPS 初始化命令。', false);
+    }
+
+    function toggleSetPath() {
+      settingPath = !settingPath;
+      var setPathButton = document.getElementById('set-path-button');
+      setPathButton.classList.toggle('active');
+
+      if (settingPath) {
+        document.getElementById('map').classList.add('crosshair-cursor');
+        return;
+      }
+
+      document.getElementById('map').classList.remove('crosshair-cursor');
+    }
+
+    function setMapStatus(message, isError) {
+      var mapStatus = document.getElementById('map-status');
+      mapStatus.textContent = message;
+      mapStatus.classList.toggle('error', !!isError);
+    }
+
+    function setRuntimeStatus(message, isError) {
+      var runtimeStatus = document.getElementById('runtime-status');
+      runtimeStatus.textContent = message;
+      runtimeStatus.classList.toggle('error', !!isError);
+    }
+
+    function getApiBase() {
+      return (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+        ? window.location.origin
+        : 'http://127.0.0.1:8090';
+    }
+
+    function buildWaypointPayload() {
+      return pathPoints.map(function(point) {
+        return {
+          "latitude": point.lat(),
+          "longitude": point.lng()
+        };
+      });
+    }
+
+    function apiRequest(path, payload, method) {
+      var requestMethod = method || 'POST';
+      var options = {
+        method: requestMethod,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      };
+
+      if (requestMethod !== 'GET') {
+        options.body = JSON.stringify(payload || {});
+      }
+
+      return fetch(getApiBase() + path, options).then(function(response) {
+        return response.json().then(function(data) {
+          if (!response.ok) {
+            throw new Error(data.error || ('请求失败: ' + path));
+          }
+          return data;
+        });
+      });
+    }
+
+    function syncInsReferencePoint() {
+      if (pathPoints.length === 0) {
+        return Promise.reject(new Error('没有可用于同步定位原点的路径点'));
+      }
+
+      return apiRequest('/update_ins_origin', {
+        "command": "waypoint",
+        "data": buildWaypointPayload()
+      });
+    }
+
+    function syncInsReferencePointFromPath() {
+      setMapStatus('正在同步定位原点/初始位姿...', false);
+      syncInsReferencePoint()
+        .then(function(result) {
+          var targetLabel = result.target_label || '定位原点';
+          var headingNote = result.heading_source === 'default_zero_yaw'
+            ? '，由于只有一个点，朝向使用默认值'
+            : '';
+          if (result.status === 'ok') {
+            setMapStatus(targetLabel + '已同步到第一个路径点' + headingNote + '。', false);
+            return;
+          }
+          throw new Error(result.error || result.message || '未知错误');
+        })
+        .catch(function(error) {
+          setMapStatus('定位原点/初始位姿同步失败: ' + error.message, true);
+        });
+    }
+
+    function sendRouteToAutoware() {
+      if (pathPoints.length < 2) {
+        alert('请至少设置两个路径点');
+        return;
+      }
+
+      setRuntimeStatus('正在向 Autoware 下发运行时路线...', false);
+      apiRequest('/set_route', {
+        "command": "waypoint",
+        "map_name": liveAutowareMapName,
+        "clear_existing": true,
+        "data": buildWaypointPayload()
+      })
+        .then(function(result) {
+          var setRoute = result.set_route || {};
+          if (result.status !== 'ok') {
+            throw new Error(setRoute.error || setRoute.message || '路线下发失败');
+          }
+
+          var runtimeMap = result.runtime_map || {};
+          var routeSummary = '路线已下发到 Autoware';
+          if (runtimeMap.output_dir) {
+            routeSummary += '，运行地图目录: ' + runtimeMap.output_dir;
+          }
+          setRuntimeStatus(routeSummary + '。', false);
+        })
+        .catch(function(error) {
+          setRuntimeStatus('Autoware 路线下发失败: ' + error.message, true);
+        })
+        .finally(function() {
+          refreshAutowareStatus();
+        });
+    }
+
+    function clearAutowareRoute() {
+      setRuntimeStatus('正在清除 Autoware 当前路线...', false);
+      apiRequest('/clear_route', {})
+        .then(function(result) {
+          var clearRoute = result.clear_route || {};
+          if (result.status !== 'ok') {
+            throw new Error(clearRoute.error || clearRoute.message || '清除路线失败');
+          }
+          setRuntimeStatus('Autoware 当前路线已清除。', false);
+        })
+        .catch(function(error) {
+          setRuntimeStatus('清除路线失败: ' + error.message, true);
+        })
+        .finally(function() {
+          refreshAutowareStatus();
+        });
+    }
+
+    function enterAutonomousMode() {
+      setRuntimeStatus('正在切换到 AUTONOMOUS，并启用 Autoware control...', false);
+      apiRequest('/change_to_autonomous', {})
+        .then(function(modeResult) {
+          var modeStatus = modeResult.change_to_autonomous || {};
+          if (modeResult.status !== 'ok') {
+            throw new Error(modeStatus.error || modeStatus.message || '切换到 AUTONOMOUS 失败');
+          }
+          return apiRequest('/enable_autoware_control', {}).then(function(controlResult) {
+            return {
+              modeResult: modeResult,
+              controlResult: controlResult
+            };
+          });
+        })
+        .then(function(result) {
+          var controlStatus = result.controlResult.enable_autoware_control || {};
+          if (result.controlResult.status !== 'ok') {
+            throw new Error(controlStatus.error || controlStatus.message || '启用 Autoware control 失败');
+          }
+          setRuntimeStatus('已请求进入 AUTONOMOUS，并启用 Autoware control。', false);
+        })
+        .catch(function(error) {
+          setRuntimeStatus('进入 AUTONOMOUS 失败: ' + error.message, true);
+        })
+        .finally(function() {
+          refreshAutowareStatus();
+        });
+    }
+
+    function stopAutoware() {
+      setRuntimeStatus('正在请求 STOP 模式...', false);
+      apiRequest('/change_to_stop', {})
+        .then(function(result) {
+          var stopStatus = result.change_to_stop || {};
+          if (result.status !== 'ok') {
+            throw new Error(stopStatus.error || stopStatus.message || '切换到 STOP 失败');
+          }
+          setRuntimeStatus('已请求切换到 STOP 模式。', false);
+        })
+        .catch(function(error) {
+          setRuntimeStatus('STOP 请求失败: ' + error.message, true);
+        })
+        .finally(function() {
+          refreshAutowareStatus();
+        });
+    }
+
+    function generateAutowareMap() {
+      if (pathPoints.length < 2) {
+        alert('请至少设置两个路径点');
+        return;
+      }
+
+      var generateButton = document.getElementById('generate-autoware-map-button');
+      if (generateButton.disabled) {
+        return;
+      }
+
+      generateButton.disabled = true;
+      setMapStatus('正在生成地图并刷新 Autoware 车道线...', false);
+
+      apiRequest('/generate_map', {
+        "command": "waypoint",
+        "map_name": liveAutowareMapName,
+        "reload_autoware": true,
+        "update_ins_origin": true,
+        "data": buildWaypointPayload()
+      })
+        .then(function(data) {
+          var reloadResult = data.autoware_reload || {};
+          var insOriginResult = data.ins_origin_update || {};
+          var originTargetLabel = insOriginResult.target_label || '定位原点/初始位姿';
+
+          if (reloadResult.status === 'ok' && insOriginResult.status === 'ok') {
+            setMapStatus('已刷新 Autoware 车道线，并同步' + originTargetLabel + '，当前地图目录: ' + data.output_dir, false);
+            return;
+          }
+
+          if (reloadResult.status === 'ok') {
+            if (insOriginResult.status === 'error') {
+              setMapStatus('车道线已刷新，但' + originTargetLabel + '同步失败: ' + insOriginResult.error, true);
+              return;
+            }
+            setMapStatus('已刷新 Autoware 车道线，当前地图目录: ' + data.output_dir, false);
+            return;
+          }
+
+          if (reloadResult.status === 'error') {
+            setMapStatus('地图已生成，但刷新 Autoware 失败: ' + reloadResult.error, true);
+            return;
+          }
+
+          setMapStatus('地图已生成到: ' + data.output_dir, false);
+        })
+        .catch(function(error) {
+          setMapStatus('地图生成或刷新失败: ' + error.message, true);
+          alert('地图生成失败: ' + error.message + '\n请先运行 /media/nvidia/program/autoware.ez21/src/launcher/autoware_launch_ez21/ui/generate_autoware_map.py');
+        })
+        .finally(function() {
+          generateButton.disabled = false;
+          refreshAutowareStatus();
+        });
+    }
+
+    function updateAutowareStatusPanel(data) {
+      var operationMode = data.operation_mode || {};
+      var routeState = data.route_state || {};
+      var services = data.services || {};
+      var runtimeMap = data.runtime_map || {};
+
+      document.getElementById('autoware-availability').textContent = '后端: 已连接';
+      document.getElementById('autoware-mode').textContent = '运行模式: ' + (operationMode.label || 'UNKNOWN');
+      document.getElementById('autoware-control').textContent =
+        '控制权限: ' + (operationMode.is_autoware_control_enabled ? 'Autoware 已接管' : 'Autoware 未接管');
+      document.getElementById('autoware-transition').textContent =
+        '状态切换: ' + (operationMode.is_in_transition ? '进行中' : '稳定');
+      document.getElementById('autoware-route-state').textContent =
+        '路线状态: ' + (routeState.label || 'UNKNOWN');
+      document.getElementById('autoware-services').textContent =
+        '服务就绪: route=' + (services.set_route_points ? 'OK' : '--') +
+        ' clear=' + (services.clear_route ? 'OK' : '--') +
+        ' auto=' + (services.change_to_autonomous ? 'OK' : '--') +
+        ' stop=' + (services.change_to_stop ? 'OK' : '--') +
+        ' init=' + (services.initialize_localization ? 'OK' : '--');
+
+      if (runtimeMap.status === 'ok') {
+        document.getElementById('runtime-map-context').textContent =
+          '运行地图: ' + runtimeMap.output_dir + ' | origin 来源: ' + runtimeMap.origin_source;
+        return;
+      }
+
+      document.getElementById('runtime-map-context').textContent =
+        '运行地图: 未就绪，' + (runtimeMap.error || '请先生成并刷新地图');
+    }
+
+    function refreshAutowareStatus() {
+      apiRequest('/autoware_status', null, 'GET')
+        .then(function(data) {
+          updateAutowareStatusPanel(data);
+        })
+        .catch(function(error) {
+          document.getElementById('autoware-availability').textContent =
+            '后端: 连接失败 - ' + error.message;
+          document.getElementById('runtime-map-context').textContent =
+            '运行地图: 无法读取状态';
+        });
+    }
+
+    window.addEventListener('load', function() {
+      displayPathPoints();
+
+      if (window.location.protocol === 'file:') {
+        reportStartupIssue('当前页面是直接从本地文件打开的，地图和后端联动可能异常。');
+      }
+
+      window.setTimeout(function() {
+        if (!googleMapsLoaded) {
+          handleGoogleMapsLoadError();
+        }
+      }, 4000);
+
+      connectWebSocket();
+      refreshAutowareStatus();
+      autowareStatusTimer = window.setInterval(refreshAutowareStatus, 1500);
+    });
+  </script>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: 'Roboto', 'Arial', sans-serif;
+    }
+
+    #map {
+      height: 100%;
+    }
+
+    #toolbar {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: calc(100vw - 560px);
+      padding: 6px 8px;
+      background-color: rgba(255, 255, 255, 0.95);
+      border: 1px solid #999;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      z-index: 2;
+    }
+
+    .large-button {
+      font-size: 1.1em;
+      padding: 5px 12px;
+      margin: 4px;
+      cursor: pointer;
+      background-color: #f5f5f5;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      text-align: center;
+    }
+
+    .large-button.active {
+      background-color: #ccc;
+    }
+
+    .large-button:disabled {
+      cursor: wait;
+      opacity: 0.6;
+    }
+
+    .crosshair-cursor {
+      cursor: crosshair;
+    }
+
+    .floating-panel {
+      position: absolute;
+      background-color: rgba(255, 255, 255, 0.96);
+      padding: 10px;
+      border: 1px solid #999;
+      border-radius: 4px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      z-index: 1;
+    }
+
+    .status-panel {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(255, 255, 255, 0.95);
+      padding: 8px 14px;
+      border: 1px solid #999;
+      border-radius: 4px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      min-width: 360px;
+      max-width: 60vw;
+      text-align: center;
+      font-size: 14px;
+      z-index: 2;
+    }
+
+    .status-panel.error {
+      color: #b00020;
+      border-color: #b00020;
+    }
+
+    #map-status {
+      top: 92px;
+    }
+
+    #runtime-status {
+      top: 140px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="toolbar">
+    <button id="set-path-button" class="large-button" onclick="toggleSetPath()">设置路径</button>
+    <button class="large-button" onclick="sendRouteToAutoware()">下发路线</button>
+    <button class="large-button" onclick="clearAutowareRoute()">清除路线</button>
+    <button class="large-button" onclick="syncInsReferencePointFromPath()">同步定位原点</button>
+    <button id="generate-autoware-map-button" class="large-button" onclick="generateAutowareMap()">生成并刷新地图</button>
+    <button class="large-button" onclick="enterAutonomousMode()">进入自动</button>
+    <button class="large-button" onclick="stopAutoware()">STOP</button>
+    <button class="large-button" onclick="clearPathPreview()">清空选点</button>
+  </div>
+
+  <div id="map-status" class="status-panel">
+    地图工具会生成并刷新 `autoware_init_map`，也可以单独同步定位原点/初始位姿。
+  </div>
+  <div id="runtime-status" class="status-panel">
+    运行时路线通过 ADAPI 下发给 Autoware；进入自动会依次请求 AUTONOMOUS 和 Autoware control。
+  </div>
+
+  <div class="floating-panel" style="top: 10px; left: 10px; width: 260px;">
+    <h3>机器人位置</h3>
+    <div id="robot-position">
+      <div id="device-status-id">设备状态ID: N/A</div>
+      <div id="latitude">纬度: N/A</div>
+      <div id="longitude">经度: N/A</div>
+      <div id="altitude">海拔: N/A</div>
+      <div id="position-x">位置X: N/A</div>
+      <div id="position-y">位置Y: N/A</div>
+      <div id="position-z">位置Z: N/A</div>
+      <div id="orientation-roll">朝向滚动: N/A</div>
+      <div id="orientation-pitch">朝向俯仰: N/A</div>
+      <div id="orientation-yaw">朝向偏航: N/A</div>
+      <div id="linear-x">线性速度X: N/A</div>
+      <div id="linear-y">线性速度Y: N/A</div>
+      <div id="linear-z">线性速度Z: N/A</div>
+      <div id="angular-x">角速度X: N/A</div>
+      <div id="angular-y">角速度Y: N/A</div>
+      <div id="angular-z">角速度Z: N/A</div>
+    </div>
+    <br>
+    <button class="large-button" onclick="moveToLatestLocation()">显示该位置并初始化 GPS</button>
+  </div>
+
+  <div class="floating-panel" style="top: 10px; right: 10px; width: 340px;">
+    <h3>Autoware 状态</h3>
+    <div id="autoware-availability">后端: N/A</div>
+    <div id="autoware-mode">运行模式: N/A</div>
+    <div id="autoware-control">控制权限: N/A</div>
+    <div id="autoware-transition">状态切换: N/A</div>
+    <div id="autoware-route-state">路线状态: N/A</div>
+    <div id="autoware-services">服务就绪: N/A</div>
+    <div id="runtime-map-context">运行地图: N/A</div>
+  </div>
+
+  <div class="floating-panel" style="bottom: 10px; left: 10px; width: 260px;">
+    <h3>本机位置</h3>
+    <div id="local-position">纬度: N/A 经度: N/A 海拔: N/A</div>
+  </div>
+
+  <div class="floating-panel" style="top: 280px; right: 10px; width: 340px; max-height: calc(100vh - 310px); overflow-y: auto;">
+    <h3>路径点</h3>
+    <div id="path-points">尚未选择路径点</div>
+  </div>
+</body>
+</html>

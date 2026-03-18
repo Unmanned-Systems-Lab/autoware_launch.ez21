@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="launch_ins_driver" default="true"/>
+  <arg name="ins_driver_param_path" default="$(find-pkg-share ins_driver_ez21)/config/driver.yaml"/>
+  <arg name="ins_driver_can_interface" default="can0"/>
+  <arg name="input_odom_topic" default="/odom_ins_at_base_link"/>
+  <arg name="output_frame_id" default="map"/>
+  <arg name="output_child_frame_id" default="base_link"/>
+
+  <group if="$(var launch_ins_driver)">
+    <include file="$(find-pkg-share ins_driver_ez21)/launch/ins_driver.launch.py">
+      <arg name="params_file" value="$(var ins_driver_param_path)"/>
+      <arg name="can_interface" value="$(var ins_driver_can_interface)"/>
+      <arg name="topic_name" value="$(var input_odom_topic)"/>
+    </include>
+  </group>
+
+  <node pkg="ins_driver_ez21" exec="ins_localization_bridge" name="ins_localization_bridge" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param name="input_odom_topic" value="$(var input_odom_topic)"/>
+    <param name="output_frame_id" value="$(var output_frame_id)"/>
+    <param name="output_child_frame_id" value="$(var output_child_frame_id)"/>
+  </node>
+</launch>
