@@ -13,11 +13,14 @@
     var endPointLabel;
     var settingPath = false;
     var liveAutowareMapName = 'autoware_init_map';
-    var socket;
+    var latestVehicleGeoPosition = null;
     var historicalPathPoints = [];
     var historicalPolyline;
     var autowareStatusTimer = null;
+    var vehicleStateTimer = null;
+    var vehicleStateRequestInFlight = false;
     var googleMapsLoaded = false;
+    var maxHistoricalPathPoints = 2000;
 
     function uiServerCommand() {
       return 'bash /media/nvidia/program/autoware.ez21/src/launcher/autoware_launch_ez21/ui/start_ui_server.sh 127.0.0.1 8090 false';
@@ -131,118 +134,205 @@
       }
     }
 
-    function connectWebSocket() {
-      socket = new WebSocket('ws://127.0.0.1:8080');
+    function asFiniteNumber(value) {
+      if (value === null || value === undefined || value === '') {
+        return null;
+      }
+      var number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
 
-      socket.onopen = function() {
-        console.log('WebSocket connection opened.');
-      };
+    function formatNumber(value, fractionDigits) {
+      var number = asFiniteNumber(value);
+      if (number === null) {
+        return 'N/A';
+      }
+      return number.toFixed(fractionDigits);
+    }
 
-      socket.onmessage = function(event) {
-        var data = JSON.parse(event.data);
-        var deviceStatusId = data.device_status_id;
+    function updateNumericField(id, label, value, fractionDigits) {
+      var element = document.getElementById(id);
+      if (!element) {
+        return;
+      }
+      element.textContent = label + ': ' + formatNumber(value, fractionDigits);
+    }
 
-        var x = parseFloat(data.pose.position.x);
-        var y = parseFloat(data.pose.position.y);
-        var z = parseFloat(data.pose.position.z);
-        var roll = parseFloat(data.pose.orientation.roll);
-        var pitch = parseFloat(data.pose.orientation.pitch);
-        var yaw = parseFloat(data.pose.orientation.yaw);
-        var linearX = parseFloat(data.twist.linear.x);
-        var linearY = parseFloat(data.twist.linear.y);
-        var linearZ = parseFloat(data.twist.linear.z);
-        var angularX = parseFloat(data.twist.angular.x);
-        var angularY = parseFloat(data.twist.angular.y);
-        var angularZ = parseFloat(data.twist.angular.z);
-        var rot = -(yaw - Math.PI / 2) * 180 / Math.PI;
-        if (rot < 0) {
-          rot += 360;
+    function buildRobotSymbol(yaw) {
+      var rotation = 0;
+      if (yaw !== null) {
+        rotation = -(yaw - Math.PI / 2) * 180 / Math.PI;
+        if (rotation < 0) {
+          rotation += 360;
         }
+      }
 
-        var robotSymbol = {
-          path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-          scale: 5,
-          strokeColor: '#FF0000',
-          fillColor: '#FF0000',
-          fillOpacity: 1,
-          rotation: rot
-        };
-
-        var lat = parseFloat(data.pose.position.latitude);
-        var lng = parseFloat(data.pose.position.longitude);
-        var alt = parseFloat(data.pose.position.altitude);
-
-        document.getElementById('latitude').textContent = '纬度: ' + lat;
-        document.getElementById('longitude').textContent = '经度: ' + lng;
-        document.getElementById('altitude').textContent = '海拔: ' + alt;
-        document.getElementById('position-x').textContent = '位置X: ' + x;
-        document.getElementById('position-y').textContent = '位置Y: ' + y;
-        document.getElementById('position-z').textContent = '位置Z: ' + z;
-        document.getElementById('orientation-roll').textContent = '朝向滚动: ' + roll;
-        document.getElementById('orientation-pitch').textContent = '朝向俯仰: ' + pitch;
-        document.getElementById('orientation-yaw').textContent = '朝向偏航: ' + yaw;
-        document.getElementById('linear-x').textContent = '线性速度X: ' + linearX;
-        document.getElementById('linear-y').textContent = '线性速度Y: ' + linearY;
-        document.getElementById('linear-z').textContent = '线性速度Z: ' + linearZ;
-        document.getElementById('angular-x').textContent = '角速度X: ' + angularX;
-        document.getElementById('angular-y').textContent = '角速度Y: ' + angularY;
-        document.getElementById('angular-z').textContent = '角速度Z: ' + angularZ;
-        document.getElementById('device-status-id').textContent = '设备状态ID: ' + deviceStatusId;
-
-        if (!isNaN(lat) && !isNaN(lng)) {
-          var newPosition = {lat: lat, lng: lng};
-          historicalPathPoints.push(newPosition);
-
-          if (historicalPolyline) {
-            historicalPolyline.setMap(null);
-          }
-          historicalPolyline = new google.maps.Polyline({
-            path: historicalPathPoints,
-            geodesic: true,
-            strokeColor: '#00FF00',
-            strokeOpacity: 0.5,
-            strokeWeight: 2
-          });
-          historicalPolyline.setMap(map);
-
-          if (marker) {
-            marker.setPosition(newPosition);
-            marker.setIcon(robotSymbol);
-          } else {
-            marker = new google.maps.Marker({
-              position: newPosition,
-              icon: robotSymbol,
-              map: map
-            });
-          }
-        }
-      };
-
-      socket.onclose = function() {
-        console.log('WebSocket connection closed.');
-        setTimeout(function() {
-          console.log('Attempting to reconnect...');
-          connectWebSocket();
-        }, 5000);
+      return {
+        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+        scale: 5,
+        strokeColor: '#FF0000',
+        fillColor: '#FF0000',
+        fillOpacity: 1,
+        rotation: rotation
       };
     }
 
+    function rememberHistoricalPosition(position) {
+      if (!googleMapsLoaded || !map) {
+        return;
+      }
+
+      if (historicalPathPoints.length > 0) {
+        var lastPoint = historicalPathPoints[historicalPathPoints.length - 1];
+        if (Math.abs(lastPoint.lat - position.lat) < 1e-7 && Math.abs(lastPoint.lng - position.lng) < 1e-7) {
+          return;
+        }
+      }
+
+      historicalPathPoints.push(position);
+      if (historicalPathPoints.length > maxHistoricalPathPoints) {
+        historicalPathPoints.shift();
+      }
+
+      if (!historicalPolyline) {
+        historicalPolyline = new google.maps.Polyline({
+          path: historicalPathPoints,
+          geodesic: true,
+          strokeColor: '#00FF00',
+          strokeOpacity: 0.5,
+          strokeWeight: 2
+        });
+        historicalPolyline.setMap(map);
+        return;
+      }
+
+      historicalPolyline.setPath(historicalPathPoints);
+    }
+
+    function updateVehicleMarker(position, robotSymbol) {
+      if (!googleMapsLoaded || !map) {
+        return;
+      }
+
+      if (marker) {
+        marker.setPosition(position);
+        marker.setIcon(robotSymbol);
+        return;
+      }
+
+      marker = new google.maps.Marker({
+        position: position,
+        icon: robotSymbol,
+        map: map
+      });
+    }
+
+    function renderVehicleState(data) {
+      var received = !!(data && data.received);
+      var pose = (data && data.pose) || {};
+      var position = pose.position || {};
+      var orientation = pose.orientation || {};
+      var twist = (data && data.twist) || {};
+      var linear = twist.linear || {};
+      var angular = twist.angular || {};
+      var geoAvailable = !!(data && data.geo_available);
+      var sourceText = '等待 /localization/kinematic_state';
+
+      if (received) {
+        sourceText = data.source_topic || 'N/A';
+      } else if (data && data.error) {
+        sourceText = data.error;
+      }
+
+      document.getElementById('position-source').textContent = '定位源: ' + sourceText;
+      document.getElementById('position-age').textContent =
+        '更新时间: ' + (received && data.age_ms !== null && data.age_ms !== undefined ? data.age_ms + ' ms' : 'N/A');
+      document.getElementById('position-geo-status').textContent =
+        '地图投影: ' + (geoAvailable ? '已可视化' : ((data && data.geo_error) ? '运行地图未就绪' : '等待运行地图原点'));
+
+      updateNumericField('latitude', '纬度', position.latitude, 7);
+      updateNumericField('longitude', '经度', position.longitude, 7);
+      updateNumericField('altitude', '海拔', position.altitude, 2);
+      updateNumericField('position-x', '位置X', position.x, 3);
+      updateNumericField('position-y', '位置Y', position.y, 3);
+      updateNumericField('position-z', '位置Z', position.z, 3);
+      updateNumericField('orientation-roll', '朝向滚动', orientation.roll, 3);
+      updateNumericField('orientation-pitch', '朝向俯仰', orientation.pitch, 3);
+      updateNumericField('orientation-yaw', '朝向偏航', orientation.yaw, 3);
+      updateNumericField('linear-x', '线性速度X', linear.x, 3);
+      updateNumericField('linear-y', '线性速度Y', linear.y, 3);
+      updateNumericField('linear-z', '线性速度Z', linear.z, 3);
+      updateNumericField('angular-x', '角速度X', angular.x, 3);
+      updateNumericField('angular-y', '角速度Y', angular.y, 3);
+      updateNumericField('angular-z', '角速度Z', angular.z, 3);
+
+      var lat = asFiniteNumber(position.latitude);
+      var lng = asFiniteNumber(position.longitude);
+      var yaw = asFiniteNumber(orientation.yaw);
+
+      if (lat === null || lng === null) {
+        return;
+      }
+
+      latestVehicleGeoPosition = {lat: lat, lng: lng};
+      if (!googleMapsLoaded || !map) {
+        return;
+      }
+
+      rememberHistoricalPosition(latestVehicleGeoPosition);
+      updateVehicleMarker(latestVehicleGeoPosition, buildRobotSymbol(yaw));
+    }
+
+    function refreshVehicleState() {
+      if (vehicleStateRequestInFlight) {
+        return;
+      }
+
+      vehicleStateRequestInFlight = true;
+      apiRequest('/vehicle_state', null, 'GET')
+        .then(function(data) {
+          renderVehicleState(data);
+        })
+        .catch(function(error) {
+          document.getElementById('position-source').textContent = '定位源: 后端连接失败';
+          document.getElementById('position-age').textContent = '更新时间: N/A';
+          document.getElementById('position-geo-status').textContent = '地图投影: N/A';
+          document.getElementById('latitude').textContent = '纬度: N/A';
+          document.getElementById('longitude').textContent = '经度: N/A';
+          document.getElementById('altitude').textContent = '海拔: N/A';
+          document.getElementById('position-x').textContent = '位置X: N/A';
+          document.getElementById('position-y').textContent = '位置Y: N/A';
+          document.getElementById('position-z').textContent = '位置Z: N/A';
+          document.getElementById('orientation-roll').textContent = '朝向滚动: N/A';
+          document.getElementById('orientation-pitch').textContent = '朝向俯仰: N/A';
+          document.getElementById('orientation-yaw').textContent = '朝向偏航: N/A';
+          document.getElementById('linear-x').textContent = '线性速度X: N/A';
+          document.getElementById('linear-y').textContent = '线性速度Y: N/A';
+          document.getElementById('linear-z').textContent = '线性速度Z: N/A';
+          document.getElementById('angular-x').textContent = '角速度X: N/A';
+          document.getElementById('angular-y').textContent = '角速度Y: N/A';
+          document.getElementById('angular-z').textContent = '角速度Z: N/A';
+          console.error('Failed to fetch vehicle state:', error);
+        })
+        .finally(function() {
+          vehicleStateRequestInFlight = false;
+        });
+    }
+
     function moveToLatestLocation() {
-      if (!marker) {
-        setMapStatus('还没有收到机器人位置，无法居中显示。', true);
+      if (!googleMapsLoaded || !map) {
+        setMapStatus('地图尚未加载完成。', true);
         return;
       }
 
-      map.setCenter(marker.getPosition());
+      if (!latestVehicleGeoPosition) {
+        setMapStatus('还没有收到可显示的车辆经纬度，无法居中显示。', true);
+        return;
+      }
+
+      map.setCenter(latestVehicleGeoPosition);
       map.setZoom(18);
-
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        setMapStatus('位置已居中，但 websocket 未连接，无法发送 GPS 初始化命令。', true);
-        return;
-      }
-
-      socket.send(JSON.stringify({"command": "Gps Initial"}));
-      setMapStatus('已居中显示当前位置，并通过 websocket 发送 GPS 初始化命令。', false);
+      setMapStatus('已居中显示当前位置。', false);
     }
 
     function toggleSetPath() {
@@ -552,8 +642,9 @@
         }
       }, 4000);
 
-      connectWebSocket();
+      refreshVehicleState();
       refreshAutowareStatus();
+      vehicleStateTimer = window.setInterval(refreshVehicleState, 500);
       autowareStatusTimer = window.setInterval(refreshAutowareStatus, 1500);
     });
   </script>
@@ -674,7 +765,9 @@
   <div class="floating-panel" style="top: 10px; left: 10px; width: 260px;">
     <h3>机器人位置</h3>
     <div id="robot-position">
-      <div id="device-status-id">设备状态ID: N/A</div>
+      <div id="position-source">定位源: N/A</div>
+      <div id="position-age">更新时间: N/A</div>
+      <div id="position-geo-status">地图投影: N/A</div>
       <div id="latitude">纬度: N/A</div>
       <div id="longitude">经度: N/A</div>
       <div id="altitude">海拔: N/A</div>
@@ -692,7 +785,7 @@
       <div id="angular-z">角速度Z: N/A</div>
     </div>
     <br>
-    <button class="large-button" onclick="moveToLatestLocation()">显示该位置并初始化 GPS</button>
+    <button class="large-button" onclick="moveToLatestLocation()">显示当前位置</button>
   </div>
 
   <div class="floating-panel" style="top: 10px; right: 10px; width: 340px;">

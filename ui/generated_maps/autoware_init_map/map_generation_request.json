@@ -4,8 +4,8 @@
   "reload_autoware": true,
   "input_point_count": 2,
   "centerline_point_count": 2,
-  "vehicle_width_m": 0.9882000000000001,
-  "lane_width_m": 1.9882,
+  "vehicle_width_m": 1.2670000000000001,
+  "lane_width_m": 2.2670000000000003,
   "lane_extra_margin_m": 1.0,
   "min_turn_radius_m": 5.5,
   "speed_limit_kph": 10.0,
@@ -13,8 +13,8 @@
   "pcd_longitudinal_step_m": 1.0,
   "pcd_lateral_step_m": 0.5,
   "origin": {
-    "latitude": 39.85583584123382,
-    "longitude": 116.15594448292268,
+    "latitude": 39.85578494421466,
+    "longitude": 116.15594848334878,
     "altitude": 0.0
   },
   "point_count": 2,
@@ -25,12 +25,12 @@
     "update_ins_origin": true,
     "data": [
       {
-        "latitude": 39.85583584123382,
-        "longitude": 116.15594448292268
+        "latitude": 39.85578494421466,
+        "longitude": 116.15594848334878
       },
       {
-        "latitude": 39.85589143482839,
-        "longitude": 116.15641923391831
+        "latitude": 39.855924957729805,
+        "longitude": 116.15594177782624
       }
     ]
   }

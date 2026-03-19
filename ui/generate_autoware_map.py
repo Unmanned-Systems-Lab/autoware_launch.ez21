@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,6 +30,7 @@ from autoware_localization_msgs.srv import InitializeLocalization
 from geometry_msgs.msg import Point
 from geometry_msgs.msg import Pose
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry
 from PIL import Image
 from pyproj import CRS
 from pyproj import Transformer
@@ -89,6 +91,7 @@ AUTOWARE_CHANGE_TO_STOP_SERVICE = "/api/operation_mode/change_to_stop"
 AUTOWARE_ENABLE_CONTROL_SERVICE = "/api/operation_mode/enable_autoware_control"
 AUTOWARE_DISABLE_CONTROL_SERVICE = "/api/operation_mode/disable_autoware_control"
 AUTOWARE_LOCALIZATION_INITIALIZE_SERVICE = "/localization/initialize"
+AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC = "/localization/kinematic_state"
 AUTOWARE_ROUTE_SERVICE_TIMEOUT_S = 10.0
 AUTOWARE_OPERATION_MODE_TIMEOUT_S = 5.0
 AUTOWARE_LOCALIZATION_TIMEOUT_S = 5.0
@@ -318,8 +321,11 @@ class AutowareRuntimeClient:
         self._localization_initialize_client = None
         self._route_state_subscription = None
         self._operation_mode_state_subscription = None
+        self._kinematic_state_subscription = None
         self._route_state: RouteState | None = None
         self._operation_mode_state: OperationModeState | None = None
+        self._kinematic_state: Odometry | None = None
+        self._kinematic_state_received_monotonic: float | None = None
         self._initialized = False
 
     def _ensure_ready(self) -> None:
@@ -372,6 +378,12 @@ class AutowareRuntimeClient:
                 self._on_operation_mode_state,
                 status_qos,
             )
+            self._kinematic_state_subscription = self._node.create_subscription(
+                Odometry,
+                AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC,
+                self._on_kinematic_state,
+                10,
+            )
             self._initialized = True
 
     def _on_route_state(self, message: RouteState) -> None:
@@ -381,6 +393,11 @@ class AutowareRuntimeClient:
     def _on_operation_mode_state(self, message: OperationModeState) -> None:
         with self._state_lock:
             self._operation_mode_state = message
+
+    def _on_kinematic_state(self, message: Odometry) -> None:
+        with self._state_lock:
+            self._kinematic_state = message
+            self._kinematic_state_received_monotonic = time.monotonic()
 
     def _spin_locked(self, duration_s: float) -> None:
         assert self._node is not None
@@ -520,6 +537,121 @@ class AutowareRuntimeClient:
             "services": services,
             "route_state": self._route_state_to_dict(route_state),
             "operation_mode": self._operation_mode_state_to_dict(operation_mode_state),
+        }
+
+    def vehicle_state_snapshot(self) -> dict[str, Any]:
+        self._ensure_ready()
+
+        with self._client_lock:
+            self._spin_locked(0.02)
+
+        with self._state_lock:
+            kinematic_state = self._kinematic_state
+            received_monotonic = self._kinematic_state_received_monotonic
+
+        if kinematic_state is None:
+            return {
+                "status": "ok",
+                "received": False,
+                "source_topic": AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC,
+                "error": f"no message received on {AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC}",
+            }
+
+        position = kinematic_state.pose.pose.position
+        orientation = kinematic_state.pose.pose.orientation
+        twist = kinematic_state.twist.twist
+        local_x = finite_float_or_none(position.x)
+        local_y = finite_float_or_none(position.y)
+        local_z = finite_float_or_none(position.z)
+        orientation_x = finite_float_or_none(orientation.x)
+        orientation_y = finite_float_or_none(orientation.y)
+        orientation_z = finite_float_or_none(orientation.z)
+        orientation_w = finite_float_or_none(orientation.w)
+        linear_x = finite_float_or_none(twist.linear.x)
+        linear_y = finite_float_or_none(twist.linear.y)
+        linear_z = finite_float_or_none(twist.linear.z)
+        angular_x = finite_float_or_none(twist.angular.x)
+        angular_y = finite_float_or_none(twist.angular.y)
+        angular_z = finite_float_or_none(twist.angular.z)
+        roll, pitch, yaw = quaternion_to_euler_xyz(
+            0.0 if orientation_x is None else orientation_x,
+            0.0 if orientation_y is None else orientation_y,
+            0.0 if orientation_z is None else orientation_z,
+            1.0 if orientation_w is None else orientation_w,
+        )
+
+        runtime_map_error = None
+        geo_position = None
+        try:
+            context = resolve_vehicle_state_runtime_map_context()
+            if local_x is not None and local_y is not None:
+                geo_position = convert_local_points_to_geo(
+                    [
+                        LocalPoint(
+                            x=local_x,
+                            y=local_y,
+                            z=float(context.elevation_m) if local_z is None else local_z,
+                        )
+                    ],
+                    build_local_transformers(context.origin)[1],
+                )[0]
+            runtime_map = runtime_map_context_to_dict(context)
+        except MapGenerationError as exc:
+            runtime_map = {
+                "status": "error",
+                "error": str(exc),
+            }
+            runtime_map_error = str(exc)
+
+        age_ms = None
+        if received_monotonic is not None:
+            age_ms = max(0, int(round((time.monotonic() - received_monotonic) * 1000.0)))
+
+        return {
+            "status": "ok",
+            "received": True,
+            "source_topic": AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC,
+            "age_ms": age_ms,
+            "frame_id": str(kinematic_state.header.frame_id),
+            "child_frame_id": str(kinematic_state.child_frame_id),
+            "stamp": {
+                "sec": int(kinematic_state.header.stamp.sec),
+                "nanosec": int(kinematic_state.header.stamp.nanosec),
+            },
+            "pose": {
+                "position": {
+                    "x": local_x,
+                    "y": local_y,
+                    "z": local_z,
+                    "latitude": None if geo_position is None else finite_float_or_none(geo_position.latitude),
+                    "longitude": None if geo_position is None else finite_float_or_none(geo_position.longitude),
+                    "altitude": None if geo_position is None else finite_float_or_none(geo_position.altitude),
+                },
+                "orientation": {
+                    "x": orientation_x,
+                    "y": orientation_y,
+                    "z": orientation_z,
+                    "w": orientation_w,
+                    "roll": finite_float_or_none(roll),
+                    "pitch": finite_float_or_none(pitch),
+                    "yaw": finite_float_or_none(yaw),
+                },
+            },
+            "twist": {
+                "linear": {
+                    "x": linear_x,
+                    "y": linear_y,
+                    "z": linear_z,
+                },
+                "angular": {
+                    "x": angular_x,
+                    "y": angular_y,
+                    "z": angular_z,
+                },
+            },
+            "runtime_map": runtime_map,
+            "geo_available": geo_position is not None,
+            "geo_error": runtime_map_error,
         }
 
     def set_route(
@@ -1212,6 +1344,48 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def finite_float_or_none(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def quaternion_to_euler_xyz(x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
+
+
+def resolve_vehicle_state_runtime_map_context() -> RuntimeMapContext:
+    try:
+        return load_runtime_map_context({})
+    except MapGenerationError as original_error:
+        active_origin = load_active_map_origin()
+        if active_origin is None:
+            raise original_error
+        return RuntimeMapContext(
+            output_dir=(DEFAULT_OUTPUT_ROOT / DEFAULT_MAP_NAME).resolve(),
+            projector_type="Local",
+            origin=active_origin,
+            elevation_m=float(active_origin.altitude),
+            origin_source="map_generation_request.json:origin",
+        )
+
+
+@lru_cache(maxsize=8)
 def build_local_transformers(origin: GeoPoint) -> tuple[Transformer, Transformer]:
     local_crs = CRS.from_proj4(
         f"+proj=aeqd +lat_0={origin.latitude} +lon_0={origin.longitude} "
@@ -2029,6 +2203,10 @@ def get_autoware_status() -> dict[str, Any]:
     return result
 
 
+def get_vehicle_state() -> dict[str, Any]:
+    return AUTOWARE_RUNTIME_CLIENT.vehicle_state_snapshot()
+
+
 def set_route_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     context = load_runtime_map_context(payload)
     path_points = parse_path_points(payload, context.elevation_m, min_points=2)
@@ -2098,7 +2276,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                     "message": (
                         "POST /generate_map, /publish_satellite_overlay, /update_ins_origin, "
                         "/set_route, /clear_route, /change_to_autonomous, /change_to_stop, "
-                        "/enable_autoware_control, or /disable_autoware_control"
+                        "/enable_autoware_control, /disable_autoware_control, or GET /vehicle_state"
                     ),
                     "default_output_root": str(DEFAULT_OUTPUT_ROOT),
                 },
@@ -2106,6 +2284,9 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             return
         if request_path == "/autoware_status":
             self._send_json(200, get_autoware_status())
+            return
+        if request_path == "/vehicle_state":
+            self._send_json(200, get_vehicle_state())
             return
         super().do_GET()
 
