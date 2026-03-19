@@ -6,8 +6,10 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ez21_vehicle_launch
 {
@@ -182,6 +184,17 @@ double raw_to_steering_angle_rad(
   return (static_cast<double>(raw_value) - center_raw) / counts_per_radian;
 }
 
+double vehicle_to_autoware_steering_angle_rad(const double vehicle_angle_rad)
+{
+  // Vehicle-side steering uses left negative/right positive; Autoware uses left positive/right negative.
+  return -vehicle_angle_rad;
+}
+
+double autoware_to_vehicle_steering_angle_rad(const double autoware_angle_rad)
+{
+  return -autoware_angle_rad;
+}
+
 uint16_t steering_angle_rad_to_raw(
   const double angle_rad, const double center_raw, const double counts_per_radian,
   const double max_steer_angle_rad)
@@ -220,6 +233,76 @@ uint8_t clamp_ratio_to_percent(const double numerator, const double denominator)
     std::lround(std::clamp(numerator / denominator, 0.0, 1.0) * 100.0));
 }
 
+void validate_lookup_table(
+  const std::vector<double> & x_points, const std::vector<double> & y_points,
+  const std::string & x_name, const std::string & y_name)
+{
+  if (x_points.empty()) {
+    throw std::invalid_argument(x_name + " must not be empty");
+  }
+  if (x_points.size() != y_points.size()) {
+    throw std::invalid_argument(x_name + " and " + y_name + " must have the same length");
+  }
+
+  double previous_x = -std::numeric_limits<double>::infinity();
+  for (std::size_t index = 0; index < x_points.size(); ++index) {
+    const double x = x_points.at(index);
+    const double y = y_points.at(index);
+
+    if (!std::isfinite(x)) {
+      throw std::invalid_argument(x_name + " must contain only finite values");
+    }
+    if (!std::isfinite(y)) {
+      throw std::invalid_argument(y_name + " must contain only finite values");
+    }
+    if (x < 0.0) {
+      throw std::invalid_argument(x_name + " must contain only non-negative values");
+    }
+    if (y < 0.0 || y > 1.0) {
+      throw std::invalid_argument(y_name + " must stay within [0.0, 1.0]");
+    }
+    if (index > 0U && x < previous_x) {
+      throw std::invalid_argument(x_name + " must be sorted in non-decreasing order");
+    }
+    previous_x = x;
+  }
+}
+
+double interpolate_lookup_table(
+  const std::vector<double> & x_points, const std::vector<double> & y_points, const double query)
+{
+  if (x_points.empty() || y_points.empty()) {
+    return 0.0;
+  }
+
+  if (query <= x_points.front()) {
+    return y_points.front();
+  }
+  if (query >= x_points.back()) {
+    return y_points.back();
+  }
+
+  for (std::size_t index = 1; index < x_points.size(); ++index) {
+    const double x1 = x_points.at(index);
+    if (query > x1) {
+      continue;
+    }
+
+    const double x0 = x_points.at(index - 1U);
+    const double y0 = y_points.at(index - 1U);
+    const double y1 = y_points.at(index);
+    const double range = x1 - x0;
+    if (range <= std::numeric_limits<double>::epsilon()) {
+      return y1;
+    }
+
+    const double alpha = (query - x0) / range;
+    return y0 + alpha * (y1 - y0);
+  }
+
+  return y_points.back();
+}
+
 }  // namespace
 
 Ez21VehicleInterfaceNode::Ez21VehicleInterfaceNode(const rclcpp::NodeOptions & options)
@@ -253,9 +336,29 @@ Ez21VehicleInterfaceNode::Ez21VehicleInterfaceNode(const rclcpp::NodeOptions & o
     declare_parameter<double>("fallback_accel_limit_mps2", 2.0);
   fallback_brake_limit_mps2_ =
     declare_parameter<double>("fallback_brake_limit_mps2", 3.0);
+  overspeed_brake_enabled_ = declare_parameter<bool>("overspeed_brake_enabled", true);
+  overspeed_brake_deadband_mps_ =
+    declare_parameter<double>("overspeed_brake_deadband_mps", 0.1);
+  overspeed_brake_ratio_denominator_min_mps_ =
+    declare_parameter<double>("overspeed_brake_ratio_denominator_min_mps", 0.5);
+  overspeed_brake_ratio_points_ = declare_parameter<std::vector<double>>(
+    "overspeed_brake_ratio_points", std::vector<double>{0.0, 0.05, 0.10, 0.20, 0.35});
+  overspeed_brake_cmd_points_ = declare_parameter<std::vector<double>>(
+    "overspeed_brake_cmd_points", std::vector<double>{0.0, 0.0, 0.10, 0.35, 0.70});
   drive_current_limit_a_ = declare_parameter<double>("drive_current_limit_a", 80.0);
   drive_max_rpm_ = declare_parameter<double>("drive_max_rpm", 640.0);
   throttle_ad_max_raw_ = declare_parameter<double>("throttle_ad_max_raw", 4095.0);
+
+  if (overspeed_brake_deadband_mps_ < 0.0) {
+    throw std::invalid_argument("overspeed_brake_deadband_mps must be non-negative");
+  }
+  if (overspeed_brake_ratio_denominator_min_mps_ < 0.0) {
+    throw std::invalid_argument(
+            "overspeed_brake_ratio_denominator_min_mps must be non-negative");
+  }
+  validate_lookup_table(
+    overspeed_brake_ratio_points_, overspeed_brake_cmd_points_, "overspeed_brake_ratio_points",
+    "overspeed_brake_cmd_points");
 
   last_sent_steering_raw_ = static_cast<uint16_t>(std::lround(steering_center_raw_));
   steering_feedback_.raw_angle = last_sent_steering_raw_;
@@ -311,7 +414,8 @@ Ez21VehicleInterfaceNode::~Ez21VehicleInterfaceNode()
 void Ez21VehicleInterfaceNode::start_can_interface()
 {
   try {
-    can_sender_ = std::make_unique<drivers::socketcan::SocketCanSender>(can_interface_, false);
+    can_sender_ = std::make_unique<drivers::socketcan::SocketCanSender>(
+      can_interface_, false, CanId{}, true);
     can_receiver_ = std::make_unique<drivers::socketcan::SocketCanReceiver>(can_interface_, false);
     receiver_running_.store(true);
     receiver_thread_ = std::thread(&Ez21VehicleInterfaceNode::receive_loop, this);
@@ -416,8 +520,9 @@ void Ez21VehicleInterfaceNode::update_steering_feedback_direct(const std::array<
 {
   steering_feedback_.valid = true;
   steering_feedback_.raw_angle = read_le_u16(data, 0U);
-  steering_feedback_.steering_tire_angle_rad = raw_to_steering_angle_rad(
-    steering_feedback_.raw_angle, steering_center_raw_, steering_counts_per_radian_);
+  steering_feedback_.steering_tire_angle_rad = vehicle_to_autoware_steering_angle_rad(
+    raw_to_steering_angle_rad(
+      steering_feedback_.raw_angle, steering_center_raw_, steering_counts_per_radian_));
   steering_feedback_.mode_raw = static_cast<uint8_t>(data.at(6) & 0x0FU);
 }
 
@@ -425,8 +530,9 @@ void Ez21VehicleInterfaceNode::update_steering_feedback_remote(const std::array<
 {
   steering_feedback_.valid = true;
   steering_feedback_.raw_angle = read_le_u16(data, 0U);
-  steering_feedback_.steering_tire_angle_rad = raw_to_steering_angle_rad(
-    steering_feedback_.raw_angle, steering_center_raw_, steering_counts_per_radian_);
+  steering_feedback_.steering_tire_angle_rad = vehicle_to_autoware_steering_angle_rad(
+    raw_to_steering_angle_rad(
+      steering_feedback_.raw_angle, steering_center_raw_, steering_counts_per_radian_));
   steering_feedback_.mode_raw = static_cast<uint8_t>(data.at(2) & 0x0FU);
   steering_feedback_.fault = steering_feedback_.fault || (data.at(3) != 0U);
 }
@@ -603,6 +709,33 @@ double Ez21VehicleInterfaceNode::resolve_brake_cmd() const
     -latest_control_cmd_->longitudinal.acceleration / fallback_brake_limit_mps2_, 0.0, 1.0);
 }
 
+double Ez21VehicleInterfaceNode::resolve_overspeed_brake_cmd() const
+{
+  if (!overspeed_brake_enabled_ || !latest_control_cmd_) {
+    return 0.0;
+  }
+
+  const double reference_velocity_mps = std::abs(latest_control_cmd_->longitudinal.velocity);
+  const double actual_velocity_mps = std::abs(average_wheel_speed_mps());
+  const double raw_overspeed_mps = actual_velocity_mps - reference_velocity_mps;
+  if (raw_overspeed_mps <= overspeed_brake_deadband_mps_) {
+    return 0.0;
+  }
+
+  const double ratio_denominator = std::max(
+    reference_velocity_mps, overspeed_brake_ratio_denominator_min_mps_);
+  if (ratio_denominator <= std::numeric_limits<double>::epsilon()) {
+    return overspeed_brake_cmd_points_.empty() ? 0.0 : overspeed_brake_cmd_points_.back();
+  }
+
+  const double overspeed_ratio =
+    (raw_overspeed_mps - overspeed_brake_deadband_mps_) / ratio_denominator;
+  return std::clamp(
+    interpolate_lookup_table(
+      overspeed_brake_ratio_points_, overspeed_brake_cmd_points_, overspeed_ratio),
+    0.0, 1.0);
+}
+
 double Ez21VehicleInterfaceNode::resolve_commanded_steering_tire_angle_rad() const
 {
   if (latest_control_cmd_) {
@@ -676,39 +809,51 @@ std::array<uint8_t, 8> Ez21VehicleInterfaceNode::build_vcu_command_frame()
 {
   std::array<uint8_t, 8> data{};
 
-  const uint8_t mode_request = resolve_requested_control_mode();
-  const bool autonomous_enabled = is_autonomous_request(mode_request);
-  const uint8_t gear_command = latest_gear_cmd_ ? latest_gear_cmd_->command : GearCommand::NONE;
-  const uint8_t gear_report = gear_command_to_report(gear_command);
-  const double target_velocity_mps = autonomous_enabled ? resolve_target_velocity_mps() : 0.0;
-  const double throttle_percent = autonomous_enabled ? (10.0 * (target_velocity_mps + 0.17)) : 0.0;
-  const double brake_cmd = autonomous_enabled ? resolve_brake_cmd() : 0.0;
-  const double steering_tire_angle_rad =
-    autonomous_enabled ? resolve_commanded_steering_tire_angle_rad() : 0.0;
+  const bool has_control_cmd = latest_control_cmd_.has_value();
+  const double signed_target_velocity_mps =
+    has_control_cmd ? static_cast<double>(latest_control_cmd_->longitudinal.velocity) : 0.0;
+  const double target_velocity_mps = std::abs(signed_target_velocity_mps);
+  const double overspeed_brake_cmd = has_control_cmd ? resolve_overspeed_brake_cmd() : 0.0;
+  const double brake_cmd =
+    has_control_cmd ? std::max(resolve_brake_cmd(), overspeed_brake_cmd) : 0.0;
+  const double throttle_percent =
+    has_control_cmd && brake_cmd <= 1e-3 ? (10.0 * (target_velocity_mps + 0.17)) : 0.0;
+  const double autoware_steering_tire_angle_rad =
+    has_control_cmd ? resolve_commanded_steering_tire_angle_rad() : 0.0;
+  const double vehicle_steering_tire_angle_rad =
+    autoware_to_vehicle_steering_angle_rad(autoware_steering_tire_angle_rad);
   const double steering_ratio =
     max_steer_angle_rad_ > std::numeric_limits<double>::epsilon()
-      ? std::clamp(steering_tire_angle_rad / max_steer_angle_rad_, -1.0, 1.0)
+      ? std::clamp(vehicle_steering_tire_angle_rad / max_steer_angle_rad_, -1.0, 1.0)
       : 0.0;
-  const double max_vehicle_speed_mps = rpm_to_mps(drive_max_rpm_, wheel_radius_m_);
+  uint8_t gear_report = GearReport::NONE;
 
-  if (std::abs(steering_tire_angle_rad) <= 1e-3) {
+  if (latest_gear_cmd_) {
+    gear_report = gear_command_to_report(latest_gear_cmd_->command);
+  } else if (signed_target_velocity_mps > velocity_zero_threshold_mps_) {
+    gear_report = GearReport::DRIVE;
+  } else if (signed_target_velocity_mps < -velocity_zero_threshold_mps_) {
+    gear_report = GearReport::REVERSE;
+  }
+
+  if (std::abs(vehicle_steering_tire_angle_rad) <= 1e-3) {
     data.at(0) |= 0x08U;
   }
-  if (autonomous_enabled && is_drive_gear_report(gear_report)) {
+  if (is_drive_gear_report(gear_report)) {
     data.at(0) |= 0x04U;
   }
-  if (autonomous_enabled && is_reverse_gear_report(gear_report)) {
+  if (is_reverse_gear_report(gear_report)) {
     data.at(0) |= 0x02U;
   }
   if (gear_report == GearReport::PARK) {
-    data.at(1) |= 0x01U;
+    data.at(1) |= 0x02U;
   }
 
   data.at(2) = clamp_ratio_to_percent(throttle_percent, 100.0);
   data.at(3) = clamp_ratio_to_percent(brake_cmd, 1.0);
   data.at(4) = steering_ratio < 0.0 ? clamp_ratio_to_percent(-steering_ratio, 1.0) : 0U;
   data.at(5) = steering_ratio > 0.0 ? clamp_ratio_to_percent(steering_ratio, 1.0) : 0U;
-  data.at(6) = clamp_ratio_to_percent(target_velocity_mps, max_vehicle_speed_mps);
+  data.at(6) = 50U;
   data.at(7) = command_heartbeat_++;
 
   return data;
@@ -719,7 +864,8 @@ std::array<uint8_t, 8> Ez21VehicleInterfaceNode::build_steering_command_frame(
 {
   std::array<uint8_t, 8> data{};
   const uint16_t raw_steering = steering_angle_rad_to_raw(
-    steering_tire_angle_rad, steering_center_raw_, steering_counts_per_radian_, max_steer_angle_rad_);
+    autoware_to_vehicle_steering_angle_rad(steering_tire_angle_rad), steering_center_raw_,
+    steering_counts_per_radian_, max_steer_angle_rad_);
   const double command_period_s = static_cast<double>(command_period_ms_) / 1000.0;
   const double delta_angle_rad =
     std::abs(static_cast<double>(raw_steering) - static_cast<double>(last_sent_steering_raw_)) /

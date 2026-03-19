@@ -14,6 +14,16 @@
     default="$(find-pkg-share autoware_launch)/config/system/diagnostics/autoware-real-vehicle-minimal.yaml"
     description="diagnostic graph config"
   />
+  <arg
+    name="component_state_monitor_topic_path"
+    default="$(find-pkg-share autoware_launch)/config/system/component_state_monitor/topics-real-vehicle-minimal.yaml"
+    description="component state monitor topics for this launch"
+  />
+  <arg
+    name="operation_mode_transition_manager_param_path"
+    default="$(find-pkg-share autoware_launch)/config/control/operation_mode_transition_manager/operation_mode_transition_manager.real_vehicle_minimal.param.yaml"
+    description="operation mode transition manager params for this launch"
+  />
 
   <!-- Vehicle / localization -->
   <arg name="vehicle_id" default="$(env VEHICLE_ID default)" description="vehicle specific ID"/>
@@ -40,6 +50,7 @@
     <arg name="launch_system" value="true"/>
     <arg name="launch_system_monitor" value="false"/>
     <arg name="diagnostic_graph_aggregator_graph_path" value="$(var diagnostic_graph_aggregator_graph_path)"/>
+    <arg name="component_state_monitor_topic_path" value="$(var component_state_monitor_topic_path)"/>
     <arg name="launch_map" value="true"/>
     <arg name="launch_sensing" value="false"/>
     <arg name="launch_localization" value="true"/>
@@ -49,6 +60,7 @@
     <arg name="launch_planning_dummy_publishers" value="true"/>
     <arg name="launch_planning" value="true"/>
     <arg name="launch_control" value="true"/>
+    <arg name="operation_mode_transition_manager_param_path" value="$(var operation_mode_transition_manager_param_path)"/>
     <arg name="launch_api" value="true"/>
 
     <!-- Real-vehicle defaults -->

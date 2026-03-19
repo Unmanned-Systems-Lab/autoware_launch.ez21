@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace ez21_vehicle_launch
 {
@@ -100,6 +101,7 @@ private:
   double resolve_target_velocity_mps() const;
   double resolve_accel_cmd() const;
   double resolve_brake_cmd() const;
+  double resolve_overspeed_brake_cmd() const;
   double resolve_commanded_steering_tire_angle_rad() const;
   double resolve_steering_tire_angle_rad() const;
   double average_wheel_speed_mps() const;
@@ -131,6 +133,11 @@ private:
   double steering_max_speed_deg_per_s_;
   double fallback_accel_limit_mps2_;
   double fallback_brake_limit_mps2_;
+  bool overspeed_brake_enabled_;
+  double overspeed_brake_deadband_mps_;
+  double overspeed_brake_ratio_denominator_min_mps_;
+  std::vector<double> overspeed_brake_ratio_points_;
+  std::vector<double> overspeed_brake_cmd_points_;
   double drive_current_limit_a_;
   double drive_max_rpm_;
   double throttle_ad_max_raw_;

@@ -124,8 +124,11 @@
 
 - 行车制动
 - 按 `0..100` 百分比发送
-- 优先使用 `actuation_cmd.brake_cmd`
-- 若没有 `actuation_cmd`，则回退用 `control_cmd.longitudinal.acceleration` 的负加速度部分按参数线性归一化
+- 基础制动来自 `control_cmd.longitudinal.acceleration` 的负加速度部分，按参数线性归一化
+- 另外支持“超速制动”：
+  当实际车速高于 `control_cmd.longitudinal.velocity` 时，会按超速比例查表追加刹车
+- 这里的“超速”只比较实际车速与参考控制速度，不使用道路限速
+- 超速制动生效时，`byte2` 油门会被压为 `0`，避免边给油边刹车
 
 ### byte4 / byte5
 
@@ -134,28 +137,23 @@
 - `byte5`
   右转，按 `0..100`
 
-当前下发使用 `control_cmd` 的转向指令，符号约定为：
+当前下发使用 `control_cmd` 的转向指令，但这里有一层符号转换：
 
-- 左转为负
-- 右转为正
+- `Autoware /control/command/control_cmd`：左转为正，右转为负
+- 车侧 `0x102 byte4/byte5`：左转为负，右转为正
+- `Vehicle interface` 会在两者之间自动反号
 - 量程为 `-30 deg .. +30 deg`
 
 转向量由目标前轮转角与 `max_steer_angle_rad` 的比例得到；当前默认 `max_steer_angle_rad = 30 deg`，因此：
 
-- `-30 deg` 对应 `byte4 = 100`、`byte5 = 0`
+- `Autoware +30 deg` 会转换为 `byte4 = 100`、`byte5 = 0`
 - `0 deg` 对应 `byte4 = 0`、`byte5 = 0`
-- `+30 deg` 对应 `byte4 = 0`、`byte5 = 100`
+- `Autoware -30 deg` 会转换为 `byte4 = 0`、`byte5 = 100`
 
 ### byte6
 
 - 限速，按 `0..100`
-
-限速由目标速度相对于当前配置最大速度的比例得到。当前最大速度由：
-
-- `drive_max_rpm`
-- `wheel_radius_m`
-
-共同换算得到。
+- 当前实现固定发送 `50`
 
 ### byte7
 
@@ -195,7 +193,8 @@
 - 优先来源于 `0x220`
 - 兼容来源于 `0x201`
 - 原始转向值通过 `steering_center_raw` 和 `steering_counts_per_radian` 换算成前轮转角
-- 当前反馈符号约定为：左转为负，右转为正
+- 车侧反馈符号约定为：左转为负，右转为正
+- 发布到 `/vehicle/status/steering_status` 前会转换为 Autoware 约定：左转为正，右转为负
 
 ### `/vehicle/status/gear_status`
 
@@ -240,14 +239,36 @@
 - `velocity_zero_threshold_mps`
   影响近零速时 `gear_status` 的判定边界
 
-### 回退路径参数
+### 纵向映射参数
 
-以下参数只在没有 `actuation_cmd` 时才会参与计算。
+以下参数参与 `control_cmd` 到油门/制动量的映射。
 
 - `fallback_accel_limit_mps2`
   用于把 `control_cmd.longitudinal.acceleration` 映射成 `byte2`
 - `fallback_brake_limit_mps2`
   用于把负加速度映射成 `byte3`
+
+### 超速制动参数
+
+- `overspeed_brake_enabled`
+  是否启用基于实际车速反馈的超速查表制动
+- `overspeed_brake_deadband_mps`
+  超速死区，小于该值时不触发额外刹车
+- `overspeed_brake_ratio_denominator_min_mps`
+  计算超速比例时的最小分母，避免低速目标下比例过大
+- `overspeed_brake_ratio_points`
+  超速比例查表横轴，要求非负且单调不减
+- `overspeed_brake_cmd_points`
+  与 `overspeed_brake_ratio_points` 一一对应的刹车指令，范围 `0.0..1.0`
+
+当前超速比例定义为：
+
+- `overspeed_ratio = max(actual_speed - reference_speed - deadband, 0) / max(reference_speed, denominator_min)`
+
+其中：
+
+- `actual_speed` 来自 4 个驱动轮反馈平均车速
+- `reference_speed` 来自 `control_cmd.longitudinal.velocity` 的绝对值
 
 ### 当前保留但未走主路径
 

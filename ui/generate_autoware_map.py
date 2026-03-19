@@ -41,6 +41,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy
 from rclpy.qos import QoSProfile
 from rclpy.qos import ReliabilityPolicy
+from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker
 from visualization_msgs.msg import MarkerArray
@@ -92,6 +93,7 @@ AUTOWARE_ENABLE_CONTROL_SERVICE = "/api/operation_mode/enable_autoware_control"
 AUTOWARE_DISABLE_CONTROL_SERVICE = "/api/operation_mode/disable_autoware_control"
 AUTOWARE_LOCALIZATION_INITIALIZE_SERVICE = "/localization/initialize"
 AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC = "/localization/kinematic_state"
+INS_RAW_GPS_TOPIC = "/sensing/ins/raw_nav_sat_fix"
 AUTOWARE_ROUTE_SERVICE_TIMEOUT_S = 10.0
 AUTOWARE_OPERATION_MODE_TIMEOUT_S = 5.0
 AUTOWARE_LOCALIZATION_TIMEOUT_S = 5.0
@@ -116,6 +118,22 @@ ROUTE_STATE_LABELS = {
 
 class MapGenerationError(Exception):
     pass
+
+
+SERVER_SHUTTING_DOWN = threading.Event()
+
+
+def is_invalid_ros_context_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "context is not valid" in message
+        or "rcl_shutdown()" in message
+        or "rcl_init() was not called" in message
+    )
+
+
+def is_server_shutdown_error(exc: Exception) -> bool:
+    return SERVER_SHUTTING_DOWN.is_set() or is_invalid_ros_context_error(exc)
 
 
 @dataclass(frozen=True)
@@ -322,10 +340,13 @@ class AutowareRuntimeClient:
         self._route_state_subscription = None
         self._operation_mode_state_subscription = None
         self._kinematic_state_subscription = None
+        self._raw_gps_subscription = None
         self._route_state: RouteState | None = None
         self._operation_mode_state: OperationModeState | None = None
         self._kinematic_state: Odometry | None = None
         self._kinematic_state_received_monotonic: float | None = None
+        self._raw_gps: NavSatFix | None = None
+        self._raw_gps_received_monotonic: float | None = None
         self._initialized = False
 
     def _ensure_ready(self) -> None:
@@ -384,6 +405,12 @@ class AutowareRuntimeClient:
                 self._on_kinematic_state,
                 10,
             )
+            self._raw_gps_subscription = self._node.create_subscription(
+                NavSatFix,
+                INS_RAW_GPS_TOPIC,
+                self._on_raw_gps,
+                10,
+            )
             self._initialized = True
 
     def _on_route_state(self, message: RouteState) -> None:
@@ -399,12 +426,26 @@ class AutowareRuntimeClient:
             self._kinematic_state = message
             self._kinematic_state_received_monotonic = time.monotonic()
 
+    def _on_raw_gps(self, message: NavSatFix) -> None:
+        with self._state_lock:
+            self._raw_gps = message
+            self._raw_gps_received_monotonic = time.monotonic()
+
     def _spin_locked(self, duration_s: float) -> None:
         assert self._node is not None
+        if SERVER_SHUTTING_DOWN.is_set() or not rclpy.ok():
+            raise RuntimeError("ROS 2 context is not available")
         deadline = time.monotonic() + max(0.0, duration_s)
         while time.monotonic() < deadline:
+            if SERVER_SHUTTING_DOWN.is_set() or not rclpy.ok():
+                raise RuntimeError("ROS 2 context is not available")
             remaining = deadline - time.monotonic()
-            rclpy.spin_once(self._node, timeout_sec=min(0.05, remaining))
+            try:
+                rclpy.spin_once(self._node, timeout_sec=min(0.05, remaining))
+            except Exception as exc:
+                if is_invalid_ros_context_error(exc):
+                    raise RuntimeError("ROS 2 context is not available") from exc
+                raise
 
     def _call_service_locked(
         self, client: Any, service_name: str, request: Any, timeout_s: float
@@ -539,6 +580,33 @@ class AutowareRuntimeClient:
             "operation_mode": self._operation_mode_state_to_dict(operation_mode_state),
         }
 
+    def _raw_gps_to_geo_point(self, message: NavSatFix | None) -> GeoPoint | None:
+        if message is None:
+            return None
+
+        latitude = finite_float_or_none(message.latitude)
+        longitude = finite_float_or_none(message.longitude)
+        altitude = finite_float_or_none(message.altitude)
+        if latitude is None or longitude is None:
+            return None
+
+        return GeoPoint(
+            latitude=latitude,
+            longitude=longitude,
+            altitude=0.0 if altitude is None else altitude,
+        )
+
+    def current_raw_gps_point(self) -> GeoPoint | None:
+        self._ensure_ready()
+
+        with self._client_lock:
+            self._spin_locked(0.02)
+
+        with self._state_lock:
+            raw_gps = self._raw_gps
+
+        return self._raw_gps_to_geo_point(raw_gps)
+
     def vehicle_state_snapshot(self) -> dict[str, Any]:
         self._ensure_ready()
 
@@ -548,13 +616,73 @@ class AutowareRuntimeClient:
         with self._state_lock:
             kinematic_state = self._kinematic_state
             received_monotonic = self._kinematic_state_received_monotonic
+            raw_gps = self._raw_gps
+            raw_gps_received_monotonic = self._raw_gps_received_monotonic
+
+        raw_geo_position = self._raw_gps_to_geo_point(raw_gps)
+        raw_gps_age_ms = None
+        if raw_gps_received_monotonic is not None:
+            raw_gps_age_ms = max(0, int(round((time.monotonic() - raw_gps_received_monotonic) * 1000.0)))
 
         if kinematic_state is None:
             return {
                 "status": "ok",
-                "received": False,
-                "source_topic": AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC,
-                "error": f"no message received on {AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC}",
+                "received": raw_geo_position is not None,
+                "source_topic": (
+                    INS_RAW_GPS_TOPIC if raw_geo_position is not None else AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC
+                ),
+                "age_ms": raw_gps_age_ms,
+                "error": (
+                    None
+                    if raw_geo_position is not None
+                    else f"no message received on {AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC}"
+                ),
+                "pose": {
+                    "position": {
+                        "x": None,
+                        "y": None,
+                        "z": None,
+                        "latitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.latitude),
+                        "longitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.longitude),
+                        "altitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.altitude),
+                    },
+                    "orientation": {
+                        "x": None,
+                        "y": None,
+                        "z": None,
+                        "w": None,
+                        "roll": None,
+                        "pitch": None,
+                        "yaw": None,
+                    },
+                },
+                "twist": {
+                    "linear": {
+                        "x": None,
+                        "y": None,
+                        "z": None,
+                    },
+                    "angular": {
+                        "x": None,
+                        "y": None,
+                        "z": None,
+                    },
+                },
+                "runtime_map": {
+                    "status": "error",
+                    "error": f"no message received on {AUTOWARE_LOCALIZATION_KINEMATIC_STATE_TOPIC}",
+                },
+                "raw_gps": {
+                    "received": raw_geo_position is not None,
+                    "age_ms": raw_gps_age_ms,
+                    "source_topic": INS_RAW_GPS_TOPIC,
+                    "latitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.latitude),
+                    "longitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.longitude),
+                    "altitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.altitude),
+                },
+                "geo_available": raw_geo_position is not None,
+                "geo_error": None if raw_geo_position is not None else "INS 原始 GPS 尚未就绪",
+                "geo_source": "ins_raw_gps" if raw_geo_position is not None else None,
             }
 
         position = kinematic_state.pose.pose.position
@@ -581,11 +709,11 @@ class AutowareRuntimeClient:
         )
 
         runtime_map_error = None
-        geo_position = None
+        projected_geo_position = None
         try:
             context = resolve_vehicle_state_runtime_map_context()
             if local_x is not None and local_y is not None:
-                geo_position = convert_local_points_to_geo(
+                projected_geo_position = convert_local_points_to_geo(
                     [
                         LocalPoint(
                             x=local_x,
@@ -602,6 +730,13 @@ class AutowareRuntimeClient:
                 "error": str(exc),
             }
             runtime_map_error = str(exc)
+
+        geo_position = raw_geo_position if raw_geo_position is not None else projected_geo_position
+        geo_source = None
+        if raw_geo_position is not None:
+            geo_source = "ins_raw_gps"
+        elif projected_geo_position is not None:
+            geo_source = "runtime_map_projection"
 
         age_ms = None
         if received_monotonic is not None:
@@ -637,6 +772,14 @@ class AutowareRuntimeClient:
                     "yaw": finite_float_or_none(yaw),
                 },
             },
+            "raw_gps": {
+                "received": raw_geo_position is not None,
+                "age_ms": raw_gps_age_ms,
+                "source_topic": INS_RAW_GPS_TOPIC,
+                "latitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.latitude),
+                "longitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.longitude),
+                "altitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.altitude),
+            },
             "twist": {
                 "linear": {
                     "x": linear_x,
@@ -651,7 +794,8 @@ class AutowareRuntimeClient:
             },
             "runtime_map": runtime_map,
             "geo_available": geo_position is not None,
-            "geo_error": runtime_map_error,
+            "geo_error": None if geo_position is not None else runtime_map_error,
+            "geo_source": geo_source,
         }
 
     def set_route(
@@ -1296,6 +1440,36 @@ def build_localization_initialize_pose(
 
 
 def sync_origin_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    command = str(payload.get("command", "")).strip()
+    if command == "current_vehicle_gps":
+        if not INS_ORIGIN_UPDATER.is_available(timeout_s=ORIGIN_SYNC_DISCOVERY_TIMEOUT_S):
+            return {
+                "status": "error",
+                "target": "ins_origin",
+                "target_label": "INS 参考原点",
+                "error": (
+                    f"INS driver parameter service is not available on "
+                    f"{INS_DRIVER_NODE_NAME}/set_parameters_atomically"
+                ),
+                "source": INS_RAW_GPS_TOPIC,
+            }
+
+        current_point = AUTOWARE_RUNTIME_CLIENT.current_raw_gps_point()
+        if current_point is None:
+            return {
+                "status": "error",
+                "target": "ins_origin",
+                "target_label": "INS 参考原点",
+                "error": f"no valid raw GPS message received on {INS_RAW_GPS_TOPIC}",
+                "source": INS_RAW_GPS_TOPIC,
+            }
+
+        result = INS_ORIGIN_UPDATER.update(current_point)
+        result["target"] = "ins_origin"
+        result["target_label"] = "INS 参考原点"
+        result["source"] = INS_RAW_GPS_TOPIC
+        return result
+
     ins_path_points = parse_path_points(payload, float("nan"), min_points=1)
     first_point = ins_path_points[0]
 
@@ -2268,45 +2442,63 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         request_path = self.path.split("?", 1)[0]
-        if request_path == "/health":
-            self._send_json(
-                200,
-                {
-                    "status": "ok",
-                    "message": (
-                        "POST /generate_map, /publish_satellite_overlay, /update_ins_origin, "
-                        "/set_route, /clear_route, /change_to_autonomous, /change_to_stop, "
-                        "/enable_autoware_control, /disable_autoware_control, or GET /vehicle_state"
-                    ),
-                    "default_output_root": str(DEFAULT_OUTPUT_ROOT),
-                },
-            )
-            return
-        if request_path == "/autoware_status":
-            self._send_json(200, get_autoware_status())
-            return
-        if request_path == "/vehicle_state":
-            self._send_json(200, get_vehicle_state())
-            return
-        super().do_GET()
+        try:
+            if SERVER_SHUTTING_DOWN.is_set() and request_path != "/health":
+                self.close_connection = True
+                self._send_json(
+                    503,
+                    {"status": "error", "error": "UI server is shutting down"},
+                )
+                return
+            if request_path == "/health":
+                self._send_json(
+                    200,
+                    {
+                        "status": "ok",
+                        "message": (
+                            "POST /generate_map, /publish_satellite_overlay, /update_ins_origin, "
+                            "/set_route, /clear_route, /change_to_autonomous, /change_to_stop, "
+                            "/enable_autoware_control, /disable_autoware_control, or GET /vehicle_state"
+                        ),
+                        "default_output_root": str(DEFAULT_OUTPUT_ROOT),
+                    },
+                )
+                return
+            if request_path == "/autoware_status":
+                self._send_json(200, get_autoware_status())
+                return
+            if request_path == "/vehicle_state":
+                self._send_json(200, get_vehicle_state())
+                return
+            super().do_GET()
+        except MapGenerationError as exc:
+            self._send_json(400, {"status": "error", "error": str(exc)})
+        except Exception as exc:
+            self._handle_request_exception(request_path, exc)
 
     def do_POST(self) -> None:
         request_path = self.path.split("?", 1)[0]
-        if request_path not in {
-            "/generate_map",
-            "/publish_satellite_overlay",
-            "/update_ins_origin",
-            "/set_route",
-            "/clear_route",
-            "/change_to_autonomous",
-            "/change_to_stop",
-            "/enable_autoware_control",
-            "/disable_autoware_control",
-        }:
-            self._send_json(404, {"status": "error", "error": "unknown endpoint"})
-            return
-
         try:
+            if SERVER_SHUTTING_DOWN.is_set():
+                self.close_connection = True
+                self._send_json(
+                    503,
+                    {"status": "error", "error": "UI server is shutting down"},
+                )
+                return
+            if request_path not in {
+                "/generate_map",
+                "/publish_satellite_overlay",
+                "/update_ins_origin",
+                "/set_route",
+                "/clear_route",
+                "/change_to_autonomous",
+                "/change_to_stop",
+                "/enable_autoware_control",
+                "/disable_autoware_control",
+            }:
+                self._send_json(404, {"status": "error", "error": "unknown endpoint"})
+                return
             content_length = int(self.headers.get("Content-Length", "0"))
             raw_body = self.rfile.read(content_length)
             payload = (
@@ -2339,25 +2531,48 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(400, {"status": "error", "error": f"invalid JSON: {exc}"})
             return
         except Exception as exc:  # pragma: no cover - safety path for manual use
-            self._send_json(500, {"status": "error", "error": str(exc)})
+            self._handle_request_exception(request_path, exc)
             return
 
         self._send_json(200, result)
 
+    def _handle_request_exception(self, request_path: str, exc: Exception) -> None:
+        if is_server_shutdown_error(exc):
+            self.close_connection = True
+            self._send_json(
+                503,
+                {
+                    "status": "error",
+                    "error": "ROS 2 context is not available because the UI server is shutting down",
+                },
+            )
+            return
+        print(f"Request failed for {request_path}: {exc}", file=sys.stderr, flush=True)
+        self._send_json(500, {"status": "error", "error": str(exc)})
+
     def _send_json(self, status_code: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+
+class UiThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 def serve(host: str, port: int) -> None:
     DEFAULT_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     handler = partial(MapRequestHandler, directory=str(SCRIPT_DIR))
+    SERVER_SHUTTING_DOWN.clear()
     try:
-        httpd = ThreadingHTTPServer((host, port), handler)
+        httpd = UiThreadingHTTPServer((host, port), handler)
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             print(
@@ -2375,8 +2590,10 @@ def serve(host: str, port: int) -> None:
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        SERVER_SHUTTING_DOWN.set()
         print("\nStopping server", flush=True)
     finally:
+        SERVER_SHUTTING_DOWN.set()
         httpd.server_close()
 
 
