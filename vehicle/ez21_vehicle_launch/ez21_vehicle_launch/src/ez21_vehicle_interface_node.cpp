@@ -22,6 +22,7 @@ using drivers::socketcan::StandardFrame;
 
 constexpr std::size_t kCanDataLength = 8U;
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kDefaultMaxSteerAngleRad = kPi / 6.0;  // 30 deg
 constexpr uint32_t kVcuCommandId = 0x00000102U;
 constexpr uint32_t kVcuFeedbackId = 0x00000203U;
 constexpr uint32_t kSteeringCommandId = 0x00000118U;
@@ -227,10 +228,11 @@ Ez21VehicleInterfaceNode::Ez21VehicleInterfaceNode(const rclcpp::NodeOptions & o
   vehicle_id_ = declare_parameter<std::string>("vehicle_id", "default");
   can_interface_ = declare_parameter<std::string>("can_interface", "can1");
   enable_can_io_ = declare_parameter<bool>("enable_can_io", true);
-  use_actuation_command_ = declare_parameter<bool>("use_actuation_command", true);
   log_received_messages_ = declare_parameter<bool>("log_received_messages", false);
   control_mode_request_default_success_ =
     declare_parameter<bool>("control_mode_request_default_success", true);
+  force_report_autonomous_control_mode_ =
+    declare_parameter<bool>("force_report_autonomous_control_mode", false);
   input_qos_depth_ = std::max<int64_t>(1, declare_parameter<int64_t>("input_qos_depth", 1));
   command_period_ms_ = std::max<int64_t>(5, declare_parameter<int64_t>("command_period_ms", 20));
   can_receive_timeout_ms_ =
@@ -242,7 +244,7 @@ Ez21VehicleInterfaceNode::Ez21VehicleInterfaceNode(const rclcpp::NodeOptions & o
   steering_center_raw_ = declare_parameter<double>("steering_center_raw", 15750.0);
   steering_counts_per_radian_ =
     declare_parameter<double>("steering_counts_per_radian", 22500.0);
-  max_steer_angle_rad_ = declare_parameter<double>("max_steer_angle_rad", 0.70);
+  max_steer_angle_rad_ = declare_parameter<double>("max_steer_angle_rad", kDefaultMaxSteerAngleRad);
   steering_min_speed_deg_per_s_ =
     declare_parameter<double>("steering_min_speed_deg_per_s", 100.0);
   steering_max_speed_deg_per_s_ =
@@ -265,11 +267,6 @@ Ez21VehicleInterfaceNode::Ez21VehicleInterfaceNode(const rclcpp::NodeOptions & o
 
   sub_control_cmd_ = create_subscription<Control>(
     "input/control_cmd", qos, std::bind(&Ez21VehicleInterfaceNode::on_control_cmd, this, _1));
-
-  if (use_actuation_command_) {
-    sub_actuation_cmd_ = create_subscription<ActuationCommandStamped>(
-      "input/actuation_cmd", qos, std::bind(&Ez21VehicleInterfaceNode::on_actuation_cmd, this, _1));
-  }
 
   sub_gear_cmd_ = create_subscription<GearCommand>(
     "input/gear_cmd", qos, std::bind(&Ez21VehicleInterfaceNode::on_gear_cmd, this, _1));
@@ -300,8 +297,10 @@ Ez21VehicleInterfaceNode::Ez21VehicleInterfaceNode(const rclcpp::NodeOptions & o
 
   RCLCPP_INFO(
     get_logger(),
-    "ez21_vehicle_interface started for vehicle_id='%s' on %s (use_actuation_command=%s)",
-    vehicle_id_.c_str(), can_interface_.c_str(), use_actuation_command_ ? "true" : "false");
+    "ez21_vehicle_interface started for vehicle_id='%s' on %s "
+    "(force_report_autonomous_control_mode=%s)",
+    vehicle_id_.c_str(), can_interface_.c_str(),
+    force_report_autonomous_control_mode_ ? "true" : "false");
 }
 
 Ez21VehicleInterfaceNode::~Ez21VehicleInterfaceNode()
@@ -455,23 +454,6 @@ void Ez21VehicleInterfaceNode::on_control_cmd(const Control::ConstSharedPtr msg)
   handle_control_cmd(*msg);
 }
 
-void Ez21VehicleInterfaceNode::on_actuation_cmd(const ActuationCommandStamped::ConstSharedPtr msg)
-{
-  {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    latest_actuation_cmd_ = *msg;
-  }
-
-  if (log_received_messages_) {
-    RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 2000,
-      "Received actuation_cmd: accel=%.3f brake=%.3f steer=%.3f",
-      msg->actuation.accel_cmd, msg->actuation.brake_cmd, msg->actuation.steer_cmd);
-  }
-
-  handle_actuation_cmd(*msg);
-}
-
 void Ez21VehicleInterfaceNode::on_gear_cmd(const GearCommand::ConstSharedPtr msg)
 {
   {
@@ -551,11 +533,6 @@ void Ez21VehicleInterfaceNode::handle_control_cmd(const Control & /*msg*/)
   // The latest control command is converted into drive and steering CAN frames in on_timer().
 }
 
-void Ez21VehicleInterfaceNode::handle_actuation_cmd(const ActuationCommandStamped & /*msg*/)
-{
-  // The latest actuation command is converted into drive CAN frames in on_timer().
-}
-
 void Ez21VehicleInterfaceNode::handle_gear_cmd(const GearCommand & /*msg*/)
 {
   // The latest gear command is applied on the next periodic command frame.
@@ -608,10 +585,6 @@ double Ez21VehicleInterfaceNode::resolve_target_velocity_mps() const
 
 double Ez21VehicleInterfaceNode::resolve_accel_cmd() const
 {
-  if (use_actuation_command_ && latest_actuation_cmd_) {
-    return std::clamp(latest_actuation_cmd_->actuation.accel_cmd, 0.0, 1.0);
-  }
-
   if (!latest_control_cmd_ || fallback_accel_limit_mps2_ <= std::numeric_limits<double>::epsilon()) {
     return 0.0;
   }
@@ -622,10 +595,6 @@ double Ez21VehicleInterfaceNode::resolve_accel_cmd() const
 
 double Ez21VehicleInterfaceNode::resolve_brake_cmd() const
 {
-  if (use_actuation_command_ && latest_actuation_cmd_) {
-    return std::clamp(latest_actuation_cmd_->actuation.brake_cmd, 0.0, 1.0);
-  }
-
   if (!latest_control_cmd_ || fallback_brake_limit_mps2_ <= std::numeric_limits<double>::epsilon()) {
     return 0.0;
   }
@@ -636,9 +605,6 @@ double Ez21VehicleInterfaceNode::resolve_brake_cmd() const
 
 double Ez21VehicleInterfaceNode::resolve_commanded_steering_tire_angle_rad() const
 {
-  if (use_actuation_command_ && latest_actuation_cmd_) {
-    return latest_actuation_cmd_->actuation.steer_cmd;
-  }
   if (latest_control_cmd_) {
     return latest_control_cmd_->lateral.steering_tire_angle;
   }
@@ -649,9 +615,6 @@ double Ez21VehicleInterfaceNode::resolve_steering_tire_angle_rad() const
 {
   if (steering_feedback_.valid) {
     return steering_feedback_.steering_tire_angle_rad;
-  }
-  if (use_actuation_command_ && latest_actuation_cmd_) {
-    return latest_actuation_cmd_->actuation.steer_cmd;
   }
   if (latest_control_cmd_) {
     return latest_control_cmd_->lateral.steering_tire_angle;
@@ -693,6 +656,9 @@ uint8_t Ez21VehicleInterfaceNode::resolve_requested_control_mode() const
 
 uint8_t Ez21VehicleInterfaceNode::resolve_reported_control_mode() const
 {
+  if (force_report_autonomous_control_mode_) {
+    return ControlModeReport::AUTONOMOUS;
+  }
   if (steering_feedback_.fault) {
     return ControlModeReport::NOT_READY;
   }
@@ -714,11 +680,11 @@ std::array<uint8_t, 8> Ez21VehicleInterfaceNode::build_vcu_command_frame()
   const bool autonomous_enabled = is_autonomous_request(mode_request);
   const uint8_t gear_command = latest_gear_cmd_ ? latest_gear_cmd_->command : GearCommand::NONE;
   const uint8_t gear_report = gear_command_to_report(gear_command);
-  const double accel_cmd = autonomous_enabled ? resolve_accel_cmd() : 0.0;
+  const double target_velocity_mps = autonomous_enabled ? resolve_target_velocity_mps() : 0.0;
+  const double throttle_percent = autonomous_enabled ? (10.0 * (target_velocity_mps + 0.17)) : 0.0;
   const double brake_cmd = autonomous_enabled ? resolve_brake_cmd() : 0.0;
   const double steering_tire_angle_rad =
     autonomous_enabled ? resolve_commanded_steering_tire_angle_rad() : 0.0;
-  const double target_velocity_mps = autonomous_enabled ? resolve_target_velocity_mps() : 0.0;
   const double steering_ratio =
     max_steer_angle_rad_ > std::numeric_limits<double>::epsilon()
       ? std::clamp(steering_tire_angle_rad / max_steer_angle_rad_, -1.0, 1.0)
@@ -738,7 +704,7 @@ std::array<uint8_t, 8> Ez21VehicleInterfaceNode::build_vcu_command_frame()
     data.at(1) |= 0x01U;
   }
 
-  data.at(2) = clamp_ratio_to_percent(accel_cmd, 1.0);
+  data.at(2) = clamp_ratio_to_percent(throttle_percent, 100.0);
   data.at(3) = clamp_ratio_to_percent(brake_cmd, 1.0);
   data.at(4) = steering_ratio < 0.0 ? clamp_ratio_to_percent(-steering_ratio, 1.0) : 0U;
   data.at(5) = steering_ratio > 0.0 ? clamp_ratio_to_percent(steering_ratio, 1.0) : 0U;

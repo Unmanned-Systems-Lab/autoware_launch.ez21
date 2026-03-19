@@ -4,9 +4,9 @@ ez21_vehicle_interface:
     can_interface: "can1"
     enable_can_io: true
     input_qos_depth: 1
-    use_actuation_command: true
     log_received_messages: false
     control_mode_request_default_success: true
+    force_report_autonomous_control_mode: true
     command_period_ms: 20
     can_receive_timeout_ms: 20
     wheel_radius_m: 0.2545
@@ -14,7 +14,7 @@ ez21_vehicle_interface:
     velocity_zero_threshold_mps: 0.1
     steering_center_raw: 15750.0
     steering_counts_per_radian: 22500.0
-    max_steer_angle_rad: 0.70
+    max_steer_angle_rad: 0.5235987755982988
     steering_min_speed_deg_per_s: 100.0
     steering_max_speed_deg_per_s: 540.0
     fallback_accel_limit_mps2: 2.0

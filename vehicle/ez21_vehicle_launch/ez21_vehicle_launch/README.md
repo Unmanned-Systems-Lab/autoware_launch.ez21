@@ -30,8 +30,6 @@
 
 - `input/control_cmd`
   对应 Autoware 的 `/control/command/control_cmd`
-- `input/actuation_cmd`
-  对应 Autoware 的 `/control/command/actuation_cmd`
 - `input/gear_cmd`
   对应 Autoware 的 `/control/command/gear_cmd`
 - `input/turn_indicators_cmd`
@@ -54,7 +52,7 @@
 
 ### Launch 入口
 
-通过 [`launch/vehicle_interface.launch.xml`](./launch/vehicle_interface.launch.xml) 启动时，还会同时拉起 `autoware_raw_vehicle_cmd_converter`，把上游 `control_cmd` 转成 `actuation_cmd` 给本节点使用。
+通过 [`launch/vehicle_interface.launch.xml`](./launch/vehicle_interface.launch.xml) 启动时，车辆接口直接使用上游 `control_cmd` 与其他车辆命令，不再依赖 `actuation_cmd`。
 
 ## 当前 CAN 设计
 
@@ -118,8 +116,9 @@
 
 - 油门控制
 - 按 `0..100` 百分比发送
-- 优先使用 `actuation_cmd.accel_cmd`
-- 若没有 `actuation_cmd`，则回退用 `control_cmd.longitudinal.acceleration` 按参数线性归一化
+- 直接使用 `control_cmd.longitudinal.velocity` 换算
+- 当前公式为 `throttle = 10 * (V + 0.17)`
+- 实现中 `V` 取速度绝对值，并对结果钳制到 `0..100`
 
 ### byte3
 
@@ -135,7 +134,17 @@
 - `byte5`
   右转，按 `0..100`
 
-转向量由目标前轮转角与 `max_steer_angle_rad` 的比例得到。
+当前下发使用 `control_cmd` 的转向指令，符号约定为：
+
+- 左转为负
+- 右转为正
+- 量程为 `-30 deg .. +30 deg`
+
+转向量由目标前轮转角与 `max_steer_angle_rad` 的比例得到；当前默认 `max_steer_angle_rad = 30 deg`，因此：
+
+- `-30 deg` 对应 `byte4 = 100`、`byte5 = 0`
+- `0 deg` 对应 `byte4 = 0`、`byte5 = 0`
+- `+30 deg` 对应 `byte4 = 0`、`byte5 = 100`
 
 ### byte6
 
@@ -186,6 +195,7 @@
 - 优先来源于 `0x220`
 - 兼容来源于 `0x201`
 - 原始转向值通过 `steering_center_raw` 和 `steering_counts_per_radian` 换算成前轮转角
+- 当前反馈符号约定为：左转为负，右转为正
 
 ### `/vehicle/status/gear_status`
 
@@ -217,9 +227,6 @@
 - `drive_max_rpm`
   用于：
   - `0x102 byte6` 限速比例换算
-- `use_actuation_command`
-  决定是否优先使用 `actuation_cmd` 作为油门、制动、转向输入
-
 ### 强烈建议正确标定
 
 以下参数不会阻止节点启动，但若配置错误，会直接影响状态质量。

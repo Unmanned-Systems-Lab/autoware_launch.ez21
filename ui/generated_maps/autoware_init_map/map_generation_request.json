@@ -13,8 +13,8 @@
   "pcd_longitudinal_step_m": 1.0,
   "pcd_lateral_step_m": 0.5,
   "origin": {
-    "latitude": 39.85546534188403,
-    "longitude": 116.15643132192362,
+    "latitude": 39.85583584123382,
+    "longitude": 116.15594448292268,
     "altitude": 0.0
   },
   "point_count": 2,
@@ -25,12 +25,12 @@
     "update_ins_origin": true,
     "data": [
       {
-        "latitude": 39.85546534188403,
-        "longitude": 116.15643132192362
+        "latitude": 39.85583584123382,
+        "longitude": 116.15594448292268
       },
       {
-        "latitude": 39.85687782465255,
-        "longitude": 116.1562650249647
+        "latitude": 39.85589143482839,
+        "longitude": 116.15641923391831
       }
     ]
   }

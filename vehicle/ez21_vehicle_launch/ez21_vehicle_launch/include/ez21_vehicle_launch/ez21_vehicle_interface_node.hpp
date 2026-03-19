@@ -13,7 +13,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <ros2_socketcan/socket_can_receiver.hpp>
 #include <ros2_socketcan/socket_can_sender.hpp>
-#include <tier4_vehicle_msgs/msg/actuation_command_stamped.hpp>
 
 #include <array>
 #include <atomic>
@@ -42,7 +41,6 @@ private:
   using SteeringReport = autoware_vehicle_msgs::msg::SteeringReport;
   using TurnIndicatorsCommand = autoware_vehicle_msgs::msg::TurnIndicatorsCommand;
   using VelocityReport = autoware_vehicle_msgs::msg::VelocityReport;
-  using ActuationCommandStamped = tier4_vehicle_msgs::msg::ActuationCommandStamped;
 
   struct MotorFeedback
   {
@@ -66,7 +64,6 @@ private:
   };
 
   void on_control_cmd(const Control::ConstSharedPtr msg);
-  void on_actuation_cmd(const ActuationCommandStamped::ConstSharedPtr msg);
   void on_gear_cmd(const GearCommand::ConstSharedPtr msg);
   void on_turn_indicators_cmd(const TurnIndicatorsCommand::ConstSharedPtr msg);
   void on_hazard_lights_cmd(const HazardLightsCommand::ConstSharedPtr msg);
@@ -76,7 +73,6 @@ private:
   void on_timer();
 
   void handle_control_cmd(const Control & msg);
-  void handle_actuation_cmd(const ActuationCommandStamped & msg);
   void handle_gear_cmd(const GearCommand & msg);
   void handle_turn_indicators_cmd(const TurnIndicatorsCommand & msg);
   void handle_hazard_lights_cmd(const HazardLightsCommand & msg);
@@ -119,9 +115,9 @@ private:
   std::string vehicle_id_;
   std::string can_interface_;
   bool enable_can_io_;
-  bool use_actuation_command_;
   bool log_received_messages_;
   bool control_mode_request_default_success_;
+  bool force_report_autonomous_control_mode_;
   int64_t input_qos_depth_;
   int64_t command_period_ms_;
   int64_t can_receive_timeout_ms_;
@@ -148,7 +144,6 @@ private:
   uint16_t last_sent_steering_raw_{0U};
 
   rclcpp::Subscription<Control>::SharedPtr sub_control_cmd_;
-  rclcpp::Subscription<ActuationCommandStamped>::SharedPtr sub_actuation_cmd_;
   rclcpp::Subscription<GearCommand>::SharedPtr sub_gear_cmd_;
   rclcpp::Subscription<TurnIndicatorsCommand>::SharedPtr sub_turn_indicators_cmd_;
   rclcpp::Subscription<HazardLightsCommand>::SharedPtr sub_hazard_lights_cmd_;
@@ -161,7 +156,6 @@ private:
   rclcpp::Publisher<ControlModeReport>::SharedPtr pub_control_mode_;
 
   std::optional<Control> latest_control_cmd_;
-  std::optional<ActuationCommandStamped> latest_actuation_cmd_;
   std::optional<GearCommand> latest_gear_cmd_;
   std::optional<TurnIndicatorsCommand> latest_turn_indicators_cmd_;
   std::optional<HazardLightsCommand> latest_hazard_lights_cmd_;

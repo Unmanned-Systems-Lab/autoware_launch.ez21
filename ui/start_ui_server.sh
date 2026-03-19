@@ -9,7 +9,7 @@ WORKSPACE_SETUP="${WORKSPACE_ROOT}/install/setup.bash"
 WORKSPACE_INSTALL_PREFIX="${WORKSPACE_ROOT}/install"
 HOST="${1:-127.0.0.1}"
 PORT="${2:-8090}"
-OPEN_INDEX="${3:-true}"
+OPEN_INDEX="${3:-false}"
 SERVER_PID=""
 
 normalize_bool() {
