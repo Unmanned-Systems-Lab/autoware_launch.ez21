@@ -42,6 +42,7 @@
   <arg name="use_object_filter" default="true" description="launch object filter to filter-out detected object"/>
   <arg name="use_obstacle_segmentation_single_frame_filter" default="false" description="use single frame filter at the ground segmentation"/>
   <arg name="use_obstacle_segmentation_time_series_filter" default="true" description="use time series filter at the ground segmentation"/>
+  <arg name="use_cuda_ground_segmentation" default="false" description="use CUDA implementation for ground segmentation"/>
   <arg name="segmentation_pointcloud_fusion_camera_ids" default="[0,2,4]" description="list of camera ids used for segmentation_pointcloud_fusion node, mainly using front camera"/>
   <arg name="use_multi_channel_tracker_merger" default="true" description="if true, multi channel tracker merger is used. Otherwise, merged object is used."/>
   <arg name="tracker_publish_merged_objects" default="false"/>
@@ -54,6 +55,16 @@
   <arg name="detected_objects_validation_method" default="obstacle_pointcloud" description="options: obstacle_pointcloud, occupancy_grid (must be used with laserscan_based_occupancy_grid_map)"/>
   <arg name="data_path" default="$(env HOME)/autoware_data" description="packages data and artifacts directory path"/>
   <arg name="lidar_detection_model" default="centerpoint" description="If the model name is not declared, the default model in perception.launch.xml will be used"/>
+  <arg
+    name="obstacle_segmentation_ground_segmentation_param_path"
+    default="$(find-pkg-share autoware_launch)/config/perception/obstacle_segmentation/ground_segmentation/ground_segmentation.param.yaml"
+    description="ground segmentation parameter file"
+  />
+  <arg
+    name="object_recognition_detection_voxel_grid_based_euclidean_cluster_param_path"
+    default="$(find-pkg-share autoware_launch)/config/perception/object_recognition/detection/clustering/voxel_grid_based_euclidean_cluster.param.yaml"
+    description="voxel-grid euclidean clustering parameter file"
+  />
   <arg name="ml_camera_lidar_merger_priority_mode" default="0" description="priority mode for ml and camera_lidar merger, options: `0: Object0`, `1: Object1`, `2: ConfidenceBased`, `3: ClassBased`"/>
   <arg name="input_pointcloud_for_traffic_light_occlusion_predictor" default="/sensing/lidar/top/pointcloud_raw_ex" description="input pointcloud topic for traffic_light_occlusion_predictor"/>
 
@@ -102,6 +113,7 @@
     <arg name="objects_validation_method" value="$(var detected_objects_validation_method)"/>
     <arg name="use_obstacle_segmentation_single_frame_filter" value="$(var use_obstacle_segmentation_single_frame_filter)"/>
     <arg name="use_obstacle_segmentation_time_series_filter" value="$(var use_obstacle_segmentation_time_series_filter)"/>
+    <arg name="use_cuda_ground_segmentation" value="$(var use_cuda_ground_segmentation)"/>
     <arg name="segmentation_pointcloud_fusion_camera_ids" value="$(var segmentation_pointcloud_fusion_camera_ids)"/>
     <arg name="use_camera_vru_detector" value="$(var use_camera_vru_detector)"/>
     <arg name="camera_vru_detector_rois_ids" value="$(var camera_vru_detector_rois_ids)"/>
@@ -125,7 +137,7 @@
     <arg name="object_recognition_detection_outlier_param_path" value="$(find-pkg-share autoware_launch)/config/perception/object_recognition/detection/clustering/outlier.param.yaml"/>
     <arg
       name="object_recognition_detection_voxel_grid_based_euclidean_cluster_param_path"
-      value="$(find-pkg-share autoware_launch)/config/perception/object_recognition/detection/clustering/voxel_grid_based_euclidean_cluster.param.yaml"
+      value="$(var object_recognition_detection_voxel_grid_based_euclidean_cluster_param_path)"
     />
     <arg
       name="object_recognition_detection_object_lanelet_filter_param_path"
@@ -240,7 +252,7 @@
     <!-- obstacle segmentation parameters -->
     <arg
       name="obstacle_segmentation_ground_segmentation_param_path"
-      value="$(find-pkg-share autoware_launch)/config/perception/obstacle_segmentation/ground_segmentation/ground_segmentation.param.yaml"
+      value="$(var obstacle_segmentation_ground_segmentation_param_path)"
     />
     <arg
       name="obstacle_segmentation_ground_segmentation_elevation_map_param_path"

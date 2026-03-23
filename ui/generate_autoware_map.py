@@ -35,6 +35,8 @@ from PIL import Image
 from pyproj import CRS
 from pyproj import Transformer
 import rclpy
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.srv import GetParameters
 from rcl_interfaces.srv import SetParametersAtomically
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -55,6 +57,7 @@ EZ21_VEHICLE_INFO_PATH = (
     / "src/launcher/autoware_launch_ez21/vehicle/ez21_vehicle_launch"
     / "ez21_vehicle_description/config/vehicle_info.param.yaml"
 )
+INS_DRIVER_CONFIG_PATH = AUTOWARE_ROOT / "src/sensor_component/ins_driver_ez21/config/driver.yaml"
 DEFAULT_MAP_NAME = "autoware_init_map"
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "generated_maps"
 AUTOWARE_MAP_RELOAD_TOPIC = "/map/map_projector_info"
@@ -157,6 +160,13 @@ class RuntimeMapContext:
     origin: GeoPoint
     elevation_m: float
     origin_source: str
+
+
+@dataclass(frozen=True)
+class GeoLocalAnchor:
+    geo: GeoPoint
+    local: LocalPoint
+    source: str
 
 
 class RvizMarkerPublisher:
@@ -307,6 +317,77 @@ class InsOriginUpdater:
 
 
 INS_ORIGIN_UPDATER = InsOriginUpdater()
+
+
+class InsOriginResolver:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._node: Node | None = None
+        self._client = None
+        self._initialized = False
+
+    def _ensure_ready(self) -> None:
+        with self._lock:
+            if self._initialized:
+                return
+
+            if not rclpy.ok():
+                rclpy.init(args=None)
+
+            self._node = Node("ui_ins_origin_resolver")
+            self._client = self._node.create_client(
+                GetParameters, f"{INS_DRIVER_NODE_NAME}/get_parameters"
+            )
+            self._initialized = True
+
+    def current_origin(self, timeout_s: float = 0.0) -> GeoPoint | None:
+        self._ensure_ready()
+        assert self._node is not None
+        assert self._client is not None
+
+        with self._lock:
+            if timeout_s > 0.0:
+                if not self._client.wait_for_service(timeout_sec=timeout_s):
+                    return None
+            elif not self._client.service_is_ready():
+                return None
+
+            request = GetParameters.Request()
+            request.names = [
+                INS_ORIGIN_ACTIVE_PARAMETER,
+                INS_ORIGIN_LATITUDE_PARAMETER,
+                INS_ORIGIN_LONGITUDE_PARAMETER,
+                INS_ORIGIN_ALTITUDE_PARAMETER,
+            ]
+            future = self._client.call_async(request)
+            deadline = time.monotonic() + max(timeout_s, ORIGIN_SYNC_DISCOVERY_TIMEOUT_S)
+
+            while not future.done():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return None
+                rclpy.spin_once(self._node, timeout_sec=min(0.1, remaining))
+
+            response = future.result()
+            if response is None or len(response.values) != len(request.names):
+                return None
+
+            active = parameter_value_to_python(response.values[0])
+            latitude = finite_float_or_none(parameter_value_to_python(response.values[1]))
+            longitude = finite_float_or_none(parameter_value_to_python(response.values[2]))
+            altitude = finite_float_or_none(parameter_value_to_python(response.values[3]))
+
+            if not active or latitude is None or longitude is None:
+                return None
+
+            return GeoPoint(
+                latitude=latitude,
+                longitude=longitude,
+                altitude=altitude if altitude is not None else DEFAULT_ELEVATION_M,
+            )
+
+
+INS_ORIGIN_RESOLVER = InsOriginResolver()
 
 
 def response_status_to_dict(status: Any) -> dict[str, Any]:
@@ -607,6 +688,40 @@ class AutowareRuntimeClient:
 
         return self._raw_gps_to_geo_point(raw_gps)
 
+    def current_geo_local_anchor(self) -> GeoLocalAnchor | None:
+        self._ensure_ready()
+
+        with self._client_lock:
+            self._spin_locked(0.02)
+
+        with self._state_lock:
+            kinematic_state = self._kinematic_state
+            raw_gps = self._raw_gps
+
+        if kinematic_state is None:
+            return None
+
+        geo = self._raw_gps_to_geo_point(raw_gps)
+        if geo is None:
+            return None
+
+        position = kinematic_state.pose.pose.position
+        local_x = finite_float_or_none(position.x)
+        local_y = finite_float_or_none(position.y)
+        local_z = finite_float_or_none(position.z)
+        if local_x is None or local_y is None:
+            return None
+
+        return GeoLocalAnchor(
+            geo=geo,
+            local=LocalPoint(
+                x=local_x,
+                y=local_y,
+                z=0.0 if local_z is None else local_z,
+            ),
+            source="current_vehicle_gps_and_local_pose",
+        )
+
     def vehicle_state_snapshot(self) -> dict[str, Any]:
         self._ensure_ready()
 
@@ -709,20 +824,8 @@ class AutowareRuntimeClient:
         )
 
         runtime_map_error = None
-        projected_geo_position = None
         try:
             context = resolve_vehicle_state_runtime_map_context()
-            if local_x is not None and local_y is not None:
-                projected_geo_position = convert_local_points_to_geo(
-                    [
-                        LocalPoint(
-                            x=local_x,
-                            y=local_y,
-                            z=float(context.elevation_m) if local_z is None else local_z,
-                        )
-                    ],
-                    build_local_transformers(context.origin)[1],
-                )[0]
             runtime_map = runtime_map_context_to_dict(context)
         except MapGenerationError as exc:
             runtime_map = {
@@ -731,12 +834,10 @@ class AutowareRuntimeClient:
             }
             runtime_map_error = str(exc)
 
-        geo_position = raw_geo_position if raw_geo_position is not None else projected_geo_position
-        geo_source = None
-        if raw_geo_position is not None:
-            geo_source = "ins_raw_gps"
-        elif projected_geo_position is not None:
-            geo_source = "runtime_map_projection"
+        geo_source = "ins_raw_gps" if raw_geo_position is not None else None
+        geo_error = None if raw_geo_position is not None else "INS 原始 GPS 尚未就绪"
+        if geo_error is not None and runtime_map_error is not None:
+            geo_error = f"{geo_error}；{runtime_map_error}"
 
         age_ms = None
         if received_monotonic is not None:
@@ -758,9 +859,9 @@ class AutowareRuntimeClient:
                     "x": local_x,
                     "y": local_y,
                     "z": local_z,
-                    "latitude": None if geo_position is None else finite_float_or_none(geo_position.latitude),
-                    "longitude": None if geo_position is None else finite_float_or_none(geo_position.longitude),
-                    "altitude": None if geo_position is None else finite_float_or_none(geo_position.altitude),
+                    "latitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.latitude),
+                    "longitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.longitude),
+                    "altitude": None if raw_geo_position is None else finite_float_or_none(raw_geo_position.altitude),
                 },
                 "orientation": {
                     "x": orientation_x,
@@ -793,8 +894,8 @@ class AutowareRuntimeClient:
                 },
             },
             "runtime_map": runtime_map,
-            "geo_available": geo_position is not None,
-            "geo_error": None if geo_position is not None else runtime_map_error,
+            "geo_available": raw_geo_position is not None,
+            "geo_error": geo_error,
             "geo_source": geo_source,
         }
 
@@ -1063,6 +1164,32 @@ def load_active_map_origin() -> GeoPoint | None:
         )
     except Exception:
         return None
+
+
+def load_configured_ins_origin() -> GeoPoint | None:
+    if not INS_DRIVER_CONFIG_PATH.exists():
+        return None
+
+    try:
+        raw_config = yaml.safe_load(INS_DRIVER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        parameters = raw_config.get("ins_driver_ez21", {}).get("ros__parameters", {})
+    except Exception:
+        return None
+
+    if not bool(parameters.get(INS_ORIGIN_ACTIVE_PARAMETER, False)):
+        return None
+
+    latitude = finite_float_or_none(parameters.get(INS_ORIGIN_LATITUDE_PARAMETER))
+    longitude = finite_float_or_none(parameters.get(INS_ORIGIN_LONGITUDE_PARAMETER))
+    altitude = finite_float_or_none(parameters.get(INS_ORIGIN_ALTITUDE_PARAMETER))
+    if latitude is None or longitude is None:
+        return None
+
+    return GeoPoint(
+        latitude=latitude,
+        longitude=longitude,
+        altitude=altitude if altitude is not None else DEFAULT_ELEVATION_M,
+    )
 
 
 def resolve_runtime_map_dir(payload: dict[str, Any]) -> Path:
@@ -1516,6 +1643,19 @@ def sync_origin_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def parameter_value_to_python(value: Any) -> Any:
+    value_type = int(value.type)
+    if value_type == ParameterType.PARAMETER_BOOL:
+        return bool(value.bool_value)
+    if value_type == ParameterType.PARAMETER_DOUBLE:
+        return float(value.double_value)
+    if value_type == ParameterType.PARAMETER_INTEGER:
+        return int(value.integer_value)
+    if value_type == ParameterType.PARAMETER_STRING:
+        return str(value.string_value)
+    return None
 
 
 def finite_float_or_none(value: Any) -> float | None:
@@ -2087,6 +2227,58 @@ def resolve_output_dir(payload: dict[str, Any], map_name: str, reload_autoware: 
     return (DEFAULT_OUTPUT_ROOT / map_name).resolve()
 
 
+def resolve_generation_origin(
+    payload: dict[str, Any], path_points: list[GeoPoint], update_ins_origin: bool
+) -> tuple[GeoPoint, str]:
+    payload_origin = parse_geo_point_mapping(payload.get("origin"), allow_missing=True)
+    if payload_origin is not None:
+        return payload_origin, "payload:origin"
+
+    if update_ins_origin:
+        return path_points[0], "payload_first_point:update_ins_origin"
+
+    ins_origin = INS_ORIGIN_RESOLVER.current_origin(timeout_s=ORIGIN_SYNC_DISCOVERY_TIMEOUT_S)
+    if ins_origin is not None:
+        return ins_origin, f"{INS_DRIVER_NODE_NAME}:active_reference_origin"
+
+    try:
+        runtime_context = load_runtime_map_context(payload)
+        return runtime_context.origin, runtime_context.origin_source
+    except MapGenerationError:
+        pass
+
+    configured_origin = load_configured_ins_origin()
+    if configured_origin is not None:
+        return configured_origin, str(INS_DRIVER_CONFIG_PATH)
+
+    return path_points[0], "payload_first_point:fallback"
+
+
+def estimate_origin_from_anchor(anchor: GeoLocalAnchor, altitude_m: float) -> GeoPoint:
+    _, inverse = build_local_transformers(anchor.geo)
+    longitude, latitude = inverse.transform(-anchor.local.x, -anchor.local.y)
+    return GeoPoint(
+        latitude=latitude,
+        longitude=longitude,
+        altitude=altitude_m,
+    )
+
+
+def project_path_from_anchor(
+    points: list[GeoPoint], anchor: GeoLocalAnchor, elevation_m: float
+) -> list[LocalPoint]:
+    forward, _ = build_local_transformers(anchor.geo)
+    relative_points = project_path(points, forward, elevation_m)
+    return [
+        LocalPoint(
+            x=anchor.local.x + point.x,
+            y=anchor.local.y + point.y,
+            z=point.z,
+        )
+        for point in relative_points
+    ]
+
+
 def build_map_projector_message(projector_info_path: Path) -> dict[str, Any]:
     try:
         raw_info = yaml.safe_load(projector_info_path.read_text(encoding="utf-8")) or {}
@@ -2120,6 +2312,25 @@ def build_map_projector_message(projector_info_path: Path) -> dict[str, Any]:
         message["scale_factor"] = 0.9996
 
     return message
+
+
+def anchor_to_dict(anchor: GeoLocalAnchor | None) -> dict[str, Any] | None:
+    if anchor is None:
+        return None
+
+    return {
+        "source": anchor.source,
+        "geo": {
+            "latitude": anchor.geo.latitude,
+            "longitude": anchor.geo.longitude,
+            "altitude": anchor.geo.altitude,
+        },
+        "local": {
+            "x": anchor.local.x,
+            "y": anchor.local.y,
+            "z": anchor.local.z,
+        },
+    }
 
 
 def reload_autoware_lanelet_map(output_dir: Path) -> dict[str, Any]:
@@ -2226,8 +2437,25 @@ def generate_map_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     input_centerline_geo = parse_path_points(payload, elevation_m)
-    forward, inverse = build_local_transformers(input_centerline_geo[0])
-    raw_centerline_local = project_path(input_centerline_geo, forward, elevation_m)
+    base_origin, origin_source = resolve_generation_origin(
+        payload, input_centerline_geo, update_ins_origin
+    )
+    generation_anchor = None
+    if not update_ins_origin and origin_source != "payload:origin":
+        generation_anchor = AUTOWARE_RUNTIME_CLIENT.current_geo_local_anchor()
+
+    if generation_anchor is not None:
+        map_origin = estimate_origin_from_anchor(generation_anchor, base_origin.altitude)
+        origin_source = generation_anchor.source
+        raw_centerline_local = project_path_from_anchor(
+            input_centerline_geo, generation_anchor, elevation_m
+        )
+    else:
+        map_origin = base_origin
+        forward, _ = build_local_transformers(map_origin)
+        raw_centerline_local = project_path(input_centerline_geo, forward, elevation_m)
+
+    _, inverse = build_local_transformers(map_origin)
     centerline_local = smooth_centerline_with_turn_radius(
         raw_centerline_local, min_turn_radius_m, DEFAULT_TURN_ARC_STEP_M
     )
@@ -2271,9 +2499,9 @@ def generate_map_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "projector_type": "Local",
                 "map_origin": {
-                    "latitude": input_centerline_geo[0].latitude,
-                    "longitude": input_centerline_geo[0].longitude,
-                    "altitude": input_centerline_geo[0].altitude,
+                    "latitude": map_origin.latitude,
+                    "longitude": map_origin.longitude,
+                    "altitude": map_origin.altitude,
                 },
             },
             sort_keys=False,
@@ -2296,11 +2524,13 @@ def generate_map_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "elevation_m": elevation_m,
         "pcd_longitudinal_step_m": longitudinal_step_m,
         "pcd_lateral_step_m": lateral_step_m,
+        "origin_source": origin_source,
         "origin": {
-            "latitude": input_centerline_geo[0].latitude,
-            "longitude": input_centerline_geo[0].longitude,
-            "altitude": input_centerline_geo[0].altitude,
+            "latitude": map_origin.latitude,
+            "longitude": map_origin.longitude,
+            "altitude": map_origin.altitude,
         },
+        "generation_anchor": anchor_to_dict(generation_anchor),
         "point_count": len(centerline_geo),
         "payload": payload,
     }
@@ -2319,7 +2549,7 @@ def generate_map_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if publish_overlay:
         try:
-            overlay_result = publish_satellite_overlay(payload, input_centerline_geo, input_centerline_geo[0])
+            overlay_result = publish_satellite_overlay(payload, input_centerline_geo, map_origin)
         except Exception as exc:
             overlay_result = {"status": "error", "error": str(exc)}
     else:
@@ -2343,6 +2573,13 @@ def generate_map_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "map_name": map_name,
         "requested_map_name": requested_map_name,
         "output_dir": str(output_dir),
+        "origin_source": origin_source,
+        "origin": {
+            "latitude": map_origin.latitude,
+            "longitude": map_origin.longitude,
+            "altitude": map_origin.altitude,
+        },
+        "generation_anchor": anchor_to_dict(generation_anchor),
         "files": {
             "lanelet2_map": str(osm_path),
             "pointcloud_map": str(pcd_path),
