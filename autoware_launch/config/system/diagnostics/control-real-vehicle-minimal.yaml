@@ -8,10 +8,8 @@ units:
       - { type: link, link: /autoware/control/performance_monitoring/control_state }
 
   - path: /autoware/control/node_alive_monitoring/command_gate
-    type: or
-    list:
-      - { type: link, link: /autoware/control/node_alive_monitoring/vehicle_cmd_gate }
-      - { type: link, link: /autoware/control/node_alive_monitoring/control_command_gate }
+    type: link
+    link: /autoware/control/node_alive_monitoring/vehicle_cmd_gate
 
   - path: /autoware/control/local
     type: and
@@ -39,11 +37,6 @@ units:
     type: diag
     node: vehicle_cmd_gate
     name: heartbeat
-
-  - path: /autoware/control/node_alive_monitoring/control_command_gate
-    type: diag
-    node: control_command_gate
-    name: timeout_output
 
   - path: /autoware/control/performance_monitoring/control_state
     type: diag

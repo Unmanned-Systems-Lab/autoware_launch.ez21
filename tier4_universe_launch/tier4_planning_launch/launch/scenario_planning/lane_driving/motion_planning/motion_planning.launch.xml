@@ -13,6 +13,7 @@
   <arg name="launch_run_out_module" default="true"/>
   <arg name="launch_boundary_departure_prevention_module" default="true"/>
   <arg name="launch_road_user_stop_module" default="true"/>
+  <arg name="launch_motion_velocity_planner" default="true"/>
   <arg name="launch_module_list_end" default="&quot;&quot;]"/>
 
   <!-- assemble launch config for motion velocity planner -->
@@ -167,7 +168,7 @@
   </group>
 
   <!-- plan slowdown or stops on the final trajectory -->
-  <group>
+  <group if="$(var launch_motion_velocity_planner)">
     <load_composable_node target="/planning/scenario_planning/lane_driving/motion_planning/motion_planning_container">
       <composable_node pkg="autoware_motion_velocity_planner" plugin="autoware::motion_velocity_planner::MotionVelocityPlannerNode" name="motion_velocity_planner" namespace="">
         <!-- topic remap -->
@@ -207,6 +208,12 @@
         <extra_arg name="use_intra_process_comms" value="false"/>
       </composable_node>
     </load_composable_node>
+  </group>
+  <group unless="$(var launch_motion_velocity_planner)">
+    <node pkg="topic_tools" exec="relay" name="motion_velocity_planner_relay">
+      <param name="input_topic" value="path_optimizer/trajectory"/>
+      <param name="output_topic" value="$(var interface_output_topic)"/>
+    </node>
   </group>
 
   <!-- surround obstacle check -->

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
   <!-- Essential parameters -->
-  <arg name="map_path" default="/media/nvidia/program/autoware.ez21/src/launcher/autoware_launch_ez21/ui/generated_maps/autoware_init_map" description="point cloud and lanelet2 map directory path"/>
+  <arg name="map_path" default="$(find-pkg-share autoware_launch)/../../../../src/launcher/autoware_launch/ui/generated_maps/autoware_init_map" description="point cloud and lanelet2 map directory path"/>
   <arg name="vehicle_model" default="ez21_vehicle" description="vehicle model name"/>
   <arg name="sensor_model" default="ez21_sensor_kit" description="sensor model name used for vehicle/sensor TFs"/>
   <arg name="data_path" default="$(env HOME)/autoware_data" description="packages data and artifacts directory path"/>
@@ -13,7 +13,11 @@
   />
 
   <!-- launch module preset -->
-  <arg name="planning_module_preset" default="default" description="planning module preset"/>
+  <arg
+    name="planning_module_preset"
+    default="robosense_m1_low_load"
+    description="planning module preset"
+  />
   <arg name="control_module_preset" default="real_vehicle_minimal" description="control module preset"/>
   <arg
     name="diagnostic_graph_aggregator_graph_path"
@@ -33,7 +37,21 @@
 
   <!-- Vehicle / localization -->
   <arg name="vehicle_id" default="$(env VEHICLE_ID default)" description="vehicle specific ID"/>
-  <arg name="ins_driver_can_interface" default="can0" description="SocketCAN interface used by the INS driver"/>
+  <arg
+    name="vehicle_interface_can_interface"
+    default="can0"
+    description="SocketCAN interface used by the EZ21 vehicle interface"
+  />
+  <arg name="ins_driver_can_interface" default="can2" description="SocketCAN interface used by the INS driver"/>
+  <arg name="localization_map_projector_info_path" default="" description="optional map_projector_info.yaml path used as a fixed ENU origin for the INS driver"/>
+  <arg name="localization_input_odom_topic" default="/odom" description="raw INS odometry topic before base_link compensation"/>
+  <arg name="localization_output_base_link_odom_topic" default="/odom_ins_at_base_link" description="converted INS odometry at base_link"/>
+  <arg name="localization_base_link_to_ins_x" default="-0.11741312220692635" description="EZ21 INS mounting x in base_link [m]"/>
+  <arg name="localization_base_link_to_ins_y" default="0.22231443971395493" description="EZ21 INS mounting y in base_link [m]"/>
+  <arg name="localization_base_link_to_ins_z" default="0.3301381915807724" description="EZ21 INS mounting z in base_link [m]"/>
+  <arg name="localization_base_link_to_ins_roll" default="0.0" description="EZ21 INS mounting roll in base_link [rad]"/>
+  <arg name="localization_base_link_to_ins_pitch" default="0.0" description="EZ21 INS mounting pitch in base_link [rad]"/>
+  <arg name="localization_base_link_to_ins_yaw" default="0.0" description="EZ21 INS mounting yaw in base_link [rad]"/>
 
   <!-- Perception -->
   <arg name="perception_mode" default="lidar" description="perception mode"/>
@@ -50,7 +68,7 @@
   />
   <arg
     name="use_cuda_ground_segmentation"
-    default="false"
+    default="true"
     description="use CUDA ground segmentation for the Robosense M1 lidar pipeline"
   />
   <arg
@@ -63,6 +81,11 @@
   <arg name="rviz" default="true" description="launch rviz"/>
   <arg name="rviz_config_name" default="autoware_robosense_m1.rviz" description="rviz config for the M1 launch"/>
   <arg name="launch_ui" default="false" description="launch runtime route/HMI UI server"/>
+  <arg
+    name="launch_planning_fallback_publishers"
+    default="false"
+    description="publish fallback acceleration/occupancy inputs when upstream topics are stale"
+  />
 
   <include file="$(find-pkg-share autoware_launch)/launch/autoware.launch.xml">
     <!-- Common -->
@@ -74,6 +97,7 @@
     <arg name="planning_module_preset" value="$(var planning_module_preset)"/>
     <arg name="control_module_preset" value="$(var control_module_preset)"/>
     <arg name="vehicle_id" value="$(var vehicle_id)"/>
+    <arg name="vehicle_interface_can_interface" value="$(var vehicle_interface_can_interface)"/>
     <arg name="perception_mode" value="$(var perception_mode)"/>
 
     <!-- Keep the real-vehicle planning/control stack, but use a custom single-lidar sensing + perception path -->
@@ -89,6 +113,15 @@
     <arg name="launch_localization" value="true"/>
     <arg name="launch_ins_driver" value="true"/>
     <arg name="ins_driver_can_interface" value="$(var ins_driver_can_interface)"/>
+    <arg name="localization_map_projector_info_path" value="$(var localization_map_projector_info_path)"/>
+    <arg name="localization_input_odom_topic" value="$(var localization_input_odom_topic)"/>
+    <arg name="localization_output_base_link_odom_topic" value="$(var localization_output_base_link_odom_topic)"/>
+    <arg name="localization_base_link_to_ins_x" value="$(var localization_base_link_to_ins_x)"/>
+    <arg name="localization_base_link_to_ins_y" value="$(var localization_base_link_to_ins_y)"/>
+    <arg name="localization_base_link_to_ins_z" value="$(var localization_base_link_to_ins_z)"/>
+    <arg name="localization_base_link_to_ins_roll" value="$(var localization_base_link_to_ins_roll)"/>
+    <arg name="localization_base_link_to_ins_pitch" value="$(var localization_base_link_to_ins_pitch)"/>
+    <arg name="localization_base_link_to_ins_yaw" value="$(var localization_base_link_to_ins_yaw)"/>
     <arg name="launch_perception" value="false"/>
     <arg name="launch_planning_dummy_publishers" value="false"/>
     <arg name="launch_planning" value="true"/>
@@ -107,6 +140,27 @@
     <arg name="rviz_config_name" value="$(var rviz_config_name)"/>
     <arg name="launch_ui" value="$(var launch_ui)"/>
   </include>
+
+  <!-- In this minimal real-vehicle setup, some planning inputs may be temporarily unavailable
+       (e.g., localization acceleration / occupancy grid). Publish safe fallback values only
+       when those topics are stale so trajectory generation can proceed. -->
+  <node
+    if="$(var launch_planning_fallback_publishers)"
+    pkg="ins_driver_ez21"
+    exec="planning_fallback_publishers"
+    name="planning_fallback_publishers"
+    output="screen"
+  >
+    <param name="acceleration_topic" value="/localization/acceleration"/>
+    <param name="occupancy_grid_topic" value="/perception/occupancy_grid_map/map"/>
+    <param name="parking_occupancy_grid_topic" value="/planning/scenario_planning/parking/costmap_generator/occupancy_grid"/>
+    <param name="base_link_frame_id" value="base_link"/>
+    <param name="map_frame_id" value="map"/>
+    <param name="stale_timeout_acceleration_sec" value="0.5"/>
+    <param name="stale_timeout_occupancy_sec" value="1.0"/>
+    <param name="timer_rate_hz" value="20.0"/>
+    <param name="occupancy_resolution" value="1.0"/>
+  </node>
 
   <!-- Robosense M1 driver -->
   <node pkg="rslidar_sdk" exec="rslidar_sdk_node" output="screen">

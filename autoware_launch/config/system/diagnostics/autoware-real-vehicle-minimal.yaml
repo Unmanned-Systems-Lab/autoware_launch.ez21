@@ -3,7 +3,7 @@ files:
   - { path: $(dirname)/localization-ins-minimal.yaml }
   - { path: $(dirname)/map.yaml }
   - { path: $(dirname)/planning.yaml }
-  - { path: $(dirname)/system.yaml }
+  - { path: $(dirname)/system-real-vehicle-minimal.yaml }
   - { path: $(dirname)/vehicle.yaml }
 
 units:

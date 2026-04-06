@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
   <!-- Essential parameters -->
-  <arg name="map_path" default="/media/nvidia/program/autoware.ez21/src/launcher/autoware_launch_ez21/ui/generated_maps/autoware_init_map" description="point cloud and lanelet2 map directory path"/>
+  <arg name="map_path" default="$(find-pkg-share autoware_launch)/../../../../src/launcher/autoware_launch/ui/generated_maps/autoware_init_map" description="point cloud and lanelet2 map directory path"/>
   <arg name="vehicle_model" default="ez21_vehicle" description="vehicle model name"/>
   <arg name="sensor_model" default="ez21_sensor_kit" description="sensor model name"/>
   <arg name="data_path" default="$(env HOME)/autoware_data" description="packages data and artifacts directory path"/>
@@ -27,7 +27,13 @@
 
   <!-- Vehicle / localization -->
   <arg name="vehicle_id" default="$(env VEHICLE_ID default)" description="vehicle specific ID"/>
+  <arg
+    name="vehicle_interface_can_interface"
+    default="can0"
+    description="SocketCAN interface used by the EZ21 vehicle interface"
+  />
   <arg name="ins_driver_can_interface" default="can0" description="SocketCAN interface used by the INS driver"/>
+  <arg name="localization_map_projector_info_path" default="" description="optional map_projector_info.yaml path used as a fixed ENU origin for the INS driver"/>
 
   <!-- Tools -->
   <arg name="rviz" default="true" description="launch rviz"/>
@@ -42,6 +48,7 @@
     <arg name="planning_module_preset" value="$(var planning_module_preset)"/>
     <arg name="control_module_preset" value="$(var control_module_preset)"/>
     <arg name="vehicle_id" value="$(var vehicle_id)"/>
+    <arg name="vehicle_interface_can_interface" value="$(var vehicle_interface_can_interface)"/>
 
     <!-- Keep only the modules needed for real-vehicle planning/control verification -->
     <arg name="launch_pointcloud_container" value="false"/>
@@ -56,6 +63,7 @@
     <arg name="launch_localization" value="true"/>
     <arg name="launch_ins_driver" value="true"/>
     <arg name="ins_driver_can_interface" value="$(var ins_driver_can_interface)"/>
+    <arg name="localization_map_projector_info_path" value="$(var localization_map_projector_info_path)"/>
     <arg name="launch_perception" value="false"/>
     <arg name="launch_planning_dummy_publishers" value="true"/>
     <arg name="launch_planning" value="true"/>

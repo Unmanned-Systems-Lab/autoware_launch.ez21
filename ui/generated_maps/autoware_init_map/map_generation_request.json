@@ -2,8 +2,8 @@
   "requested_map_name": "autoware_init_map",
   "map_name": "autoware_init_map",
   "reload_autoware": true,
-  "input_point_count": 2,
-  "centerline_point_count": 2,
+  "input_point_count": 4,
+  "centerline_point_count": 7,
   "vehicle_width_m": 1.2670000000000001,
   "lane_width_m": 2.2670000000000003,
   "lane_extra_margin_m": 1.0,
@@ -14,24 +14,24 @@
   "pcd_lateral_step_m": 0.5,
   "origin_source": "current_vehicle_gps_and_local_pose",
   "origin": {
-    "latitude": 39.855860839247924,
-    "longitude": 116.15593959858947,
+    "latitude": 29.59149333829877,
+    "longitude": 121.98686244101356,
     "altitude": 0.0
   },
   "generation_anchor": {
     "source": "current_vehicle_gps_and_local_pose",
     "geo": {
-      "latitude": 39.856045099999996,
-      "longitude": 116.1560653,
-      "altitude": 105.816
+      "latitude": 29.591495199999997,
+      "longitude": 121.98686029999999,
+      "altitude": 21.538
     },
     "local": {
-      "x": 10.756663815430072,
-      "y": 20.458807514334676,
-      "z": 0.2675
+      "x": -0.20741925302165876,
+      "y": 0.2063613641019258,
+      "z": -0.381628050817176
     }
   },
-  "point_count": 2,
+  "point_count": 7,
   "payload": {
     "command": "waypoint",
     "map_name": "autoware_init_map",
@@ -39,12 +39,20 @@
     "update_ins_origin": false,
     "data": [
       {
-        "latitude": 39.85618167379731,
-        "longitude": 116.15605695629026
+        "latitude": 29.59149658625638,
+        "longitude": 121.98695778161469
       },
       {
-        "latitude": 39.855790460311205,
-        "longitude": 116.15608511948491
+        "latitude": 29.5914957,
+        "longitude": 121.98686
+      },
+      {
+        "latitude": 29.5914798,
+        "longitude": 121.9868078
+      },
+      {
+        "latitude": 29.5913953,
+        "longitude": 121.9865856
       }
     ]
   }

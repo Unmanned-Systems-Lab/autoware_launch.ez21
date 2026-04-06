@@ -1,7 +1,7 @@
 ez21_vehicle_interface:
   ros__parameters:
     vehicle_id: "default"
-    can_interface: "can1"
+    can_interface: "can0"
     enable_can_io: true
     input_qos_depth: 1
     log_received_messages: false

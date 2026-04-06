@@ -6,6 +6,10 @@
     default="$(find-pkg-share autoware_raw_vehicle_cmd_converter)/config/raw_vehicle_cmd_converter.param.yaml"/>
   <arg name="initial_engage_state" default="false"/>
   <arg
+    name="vehicle_interface_can_interface"
+    default="can0"
+    description="SocketCAN interface used by the EZ21 vehicle interface"/>
+  <arg
     name="vehicle_interface_param_path"
     default="$(find-pkg-share ez21_vehicle_launch)/config/vehicle_interface.param.yaml"/>
 
@@ -16,6 +20,7 @@
     output="screen">
     <param from="$(var vehicle_interface_param_path)"/>
     <param name="vehicle_id" value="$(var vehicle_id)"/>
+    <param name="can_interface" value="$(var vehicle_interface_can_interface)"/>
 
     <remap from="input/control_cmd" to="/control/command/control_cmd"/>
     <remap from="input/gear_cmd" to="/control/command/gear_cmd"/>

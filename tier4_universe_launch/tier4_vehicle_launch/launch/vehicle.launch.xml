@@ -6,6 +6,10 @@
   <arg name="sensor_model" description="sensor model name"/>
   <arg name="vehicle_id" default="$(env VEHICLE_ID default)" description="vehicle specific ID"/>
   <arg name="initial_engage_state" default="false" description="/vehicle/engage state after starting Autoware"/>
+  <arg
+    name="vehicle_interface_can_interface"
+    default="can0"
+    description="SocketCAN interface used by the vehicle interface"/>
   <arg name="config_dir" default="$(find-pkg-share $(var sensor_model)_description)/config" description="path to dir where sensors_calibration.yaml, etc. are located"/>
   <arg name="raw_vehicle_cmd_converter_param_path" default="$(find-pkg-share autoware_raw_vehicle_cmd_converter)/config/raw_vehicle_cmd_converter.param.yaml"/>
 
@@ -27,6 +31,7 @@
       <arg name="vehicle_id" value="$(var vehicle_id)"/>
       <arg name="raw_vehicle_cmd_converter_param_path" value="$(var raw_vehicle_cmd_converter_param_path)"/>
       <arg name="initial_engage_state" value="$(var initial_engage_state)"/>
+      <arg name="vehicle_interface_can_interface" value="$(var vehicle_interface_can_interface)"/>
     </include>
   </group>
 </launch>

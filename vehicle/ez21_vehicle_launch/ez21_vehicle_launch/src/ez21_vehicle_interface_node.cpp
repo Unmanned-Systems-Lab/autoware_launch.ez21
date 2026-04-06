@@ -415,7 +415,7 @@ void Ez21VehicleInterfaceNode::start_can_interface()
 {
   try {
     can_sender_ = std::make_unique<drivers::socketcan::SocketCanSender>(
-      can_interface_, false, CanId{}, true);
+      can_interface_, false, CanId{});
     can_receiver_ = std::make_unique<drivers::socketcan::SocketCanReceiver>(can_interface_, false);
     receiver_running_.store(true);
     receiver_thread_ = std::thread(&Ez21VehicleInterfaceNode::receive_loop, this);

@@ -1,6 +1,9 @@
 <launch>
   <arg name="enable_all_modules_auto_mode"/>
   <arg name="is_simulation"/>
+  <arg name="launch_external_velocity_limit_selector" default="true"/>
+  <arg name="launch_velocity_smoother" default="true"/>
+  <arg name="launch_hazard_lights_selector" default="true"/>
   <!-- Input topic parameters -->
   <arg name="input_objects_topic_name"/>
   <arg name="input_pointcloud_topic_name"/>
@@ -22,14 +25,14 @@
   <!-- velocity planning with max velocity, acceleration, jerk, stop point constraint -->
   <group>
     <!-- external velocity limit selector -->
-    <group>
+    <group if="$(var launch_external_velocity_limit_selector)">
       <include file="$(find-pkg-share autoware_external_velocity_limit_selector)/launch/external_velocity_limit_selector.launch.xml">
         <arg name="common_param_path" value="$(var common_param_path)"/>
         <arg name="param_path" value="$(var velocity_smoother_param_path)"/>
       </include>
     </group>
     <!-- motion velocity smoother -->
-    <group>
+    <group if="$(var launch_velocity_smoother)">
       <node_container pkg="rclcpp_components" exec="component_container" name="velocity_smoother_container" namespace="">
         <composable_node pkg="autoware_velocity_smoother" plugin="autoware::velocity_smoother::VelocitySmootherNode" name="velocity_smoother" namespace="">
           <param name="algorithm_type" value="$(var velocity_smoother_type)"/>
@@ -50,10 +53,16 @@
         <composable_node pkg="autoware_glog_component" plugin="autoware::glog_component::GlogComponent" name="glog_component" namespace=""/>
       </node_container>
     </group>
+    <group unless="$(var launch_velocity_smoother)">
+      <node pkg="topic_tools" exec="relay" name="velocity_smoother_relay">
+        <param name="input_topic" value="/planning/scenario_planning/scenario_selector/trajectory"/>
+        <param name="output_topic" value="/planning/scenario_planning/velocity_smoother/trajectory"/>
+      </node>
+    </group>
   </group>
 
   <!-- hazard lights selector -->
-  <group>
+  <group if="$(var launch_hazard_lights_selector)">
     <include file="$(find-pkg-share autoware_hazard_lights_selector)/launch/hazard_lights_selector.launch.xml">
       <arg name="hazard_lights_selector_param_path" value="$(var hazard_lights_selector_param_path)"/>
     </include>

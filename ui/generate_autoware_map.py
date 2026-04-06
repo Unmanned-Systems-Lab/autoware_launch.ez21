@@ -50,11 +50,11 @@ from visualization_msgs.msg import MarkerArray
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AUTOWARE_ROOT = Path("/media/nvidia/program/autoware.ez21")
+AUTOWARE_ROOT = SCRIPT_DIR.parents[3]
 AUTOWARE_SETUP_BASH = AUTOWARE_ROOT / "install/setup.bash"
 EZ21_VEHICLE_INFO_PATH = (
     AUTOWARE_ROOT
-    / "src/launcher/autoware_launch_ez21/vehicle/ez21_vehicle_launch"
+    / "src/launcher/autoware_launch/vehicle/ez21_vehicle_launch"
     / "ez21_vehicle_description/config/vehicle_info.param.yaml"
 )
 INS_DRIVER_CONFIG_PATH = AUTOWARE_ROOT / "src/sensor_component/ins_driver_ez21/config/driver.yaml"
