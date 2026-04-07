@@ -5,3 +5,6 @@
     nodes_to_ignore:  # List of nodes to ignore when checking for duplicates
       - /rviz2
       - /simulation/getParameter
+      - /trajectory_relay
+      - /system/processing_time_checker
+      - /robot_state_publisher

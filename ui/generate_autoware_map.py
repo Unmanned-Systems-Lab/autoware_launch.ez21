@@ -62,6 +62,13 @@ DEFAULT_MAP_NAME = "autoware_init_map"
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "generated_maps"
 AUTOWARE_MAP_RELOAD_TOPIC = "/map/map_projector_info"
 AUTOWARE_MAP_RELOAD_TIMEOUT_S = 20.0
+AUTOWARE_MAP_COMPONENT_RELOAD_TIMEOUT_S = 30.0
+AUTOWARE_MAP_CONTAINER = "/map/map_container"
+AUTOWARE_POINTCLOUD_MAP_TOPIC = "/map/pointcloud_map"
+AUTOWARE_POINTCLOUD_MAP_METADATA_TOPIC = "/map/pointcloud_map_metadata"
+AUTOWARE_POINTCLOUD_MAP_LOADER_NODE = "/map/pointcloud_map_loader"
+AUTOWARE_POINTCLOUD_MAP_LOADER_PACKAGE = "autoware_map_loader"
+AUTOWARE_POINTCLOUD_MAP_LOADER_PLUGIN = "autoware::map_loader::PointCloudMapLoaderNode"
 INS_DRIVER_NODE_NAME = "/ins_driver_ez21"
 INS_ORIGIN_UPDATE_TIMEOUT_S = 5.0
 INS_ORIGIN_ACTIVE_PARAMETER = "reference_origin_active"
@@ -2356,8 +2363,14 @@ def reload_autoware_lanelet_map(output_dir: Path) -> dict[str, Any]:
         }
 
     message_json = json.dumps(build_map_projector_message(projector_info_path), ensure_ascii=False)
-    command = (
-        f"source {shlex.quote(str(AUTOWARE_SETUP_BASH))} && "
+    profile_path = Path.home() / ".profile"
+    shell_steps = []
+    if profile_path.exists():
+        shell_steps.append(
+            f"source {shlex.quote(str(profile_path))} >/dev/null 2>&1 || true"
+        )
+    shell_steps.append(f"source {shlex.quote(str(AUTOWARE_SETUP_BASH))}")
+    shell_steps.append(
         "ros2 topic pub --once "
         "--qos-durability transient_local "
         "--qos-reliability reliable "
@@ -2365,6 +2378,7 @@ def reload_autoware_lanelet_map(output_dir: Path) -> dict[str, Any]:
         "autoware_map_msgs/msg/MapProjectorInfo "
         f"{shlex.quote(message_json)}"
     )
+    command = " ; ".join(shell_steps)
 
     try:
         result = subprocess.run(
@@ -2400,6 +2414,196 @@ def reload_autoware_lanelet_map(output_dir: Path) -> dict[str, Any]:
         "topic": AUTOWARE_MAP_RELOAD_TOPIC,
         "lanelet2_map": str(lanelet2_map_path),
         "map_projector_info": str(projector_info_path),
+    }
+
+
+def reload_autoware_pointcloud_map(output_dir: Path) -> dict[str, Any]:
+    pointcloud_map_path = output_dir / "pointcloud_map.pcd"
+    pointcloud_map_metadata_path = output_dir / "pointcloud_map_metadata.yaml"
+
+    if not AUTOWARE_SETUP_BASH.exists():
+        return {
+            "status": "error",
+            "error": f"Autoware setup script not found: {AUTOWARE_SETUP_BASH}",
+        }
+
+    if not pointcloud_map_path.exists():
+        return {
+            "status": "error",
+            "error": f"pointcloud map file not found: {pointcloud_map_path}",
+        }
+
+    if not pointcloud_map_metadata_path.exists():
+        return {
+            "status": "error",
+            "error": f"pointcloud map metadata file not found: {pointcloud_map_metadata_path}",
+        }
+
+    profile_path = Path.home() / ".profile"
+    shell_prefix = []
+    if profile_path.exists():
+        shell_prefix.append(
+            f"source {shlex.quote(str(profile_path))} >/dev/null 2>&1 || true"
+        )
+    shell_prefix.append(f"source {shlex.quote(str(AUTOWARE_SETUP_BASH))}")
+    prefix = " ; ".join(shell_prefix)
+
+    try:
+        list_result = subprocess.run(
+            ["bash", "-lc", prefix + f" ; ros2 component list {shlex.quote(AUTOWARE_MAP_CONTAINER)}"],
+            capture_output=True,
+            text=True,
+            timeout=AUTOWARE_MAP_RELOAD_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "error": "timed out while listing the current map container components",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"failed to inspect the current map container: {exc}",
+        }
+
+    if list_result.returncode != 0:
+        error_message = (
+            (list_result.stderr or "").strip()
+            or (list_result.stdout or "").strip()
+            or "unknown ros2 component list failure"
+        )
+        return {
+            "status": "error",
+            "error": error_message,
+        }
+
+    pointcloud_component_uid = None
+    for line in list_result.stdout.splitlines():
+        match = re.match(
+            r"\s*(\d+)\s+(/map/pointcloud_map_loader|/pointcloud_map_loader)\s*$",
+            line.strip(),
+        )
+        if match:
+            pointcloud_component_uid = match.group(1)
+            break
+
+    reload_steps = []
+    if pointcloud_component_uid is not None:
+        reload_steps.append(
+            "ros2 component unload "
+            f"{shlex.quote(AUTOWARE_MAP_CONTAINER)} {shlex.quote(pointcloud_component_uid)}"
+        )
+        reload_steps.append("sleep 1")
+
+    load_arguments = [
+        "ros2 component load",
+        shlex.quote(AUTOWARE_MAP_CONTAINER),
+        shlex.quote(AUTOWARE_POINTCLOUD_MAP_LOADER_PACKAGE),
+        shlex.quote(AUTOWARE_POINTCLOUD_MAP_LOADER_PLUGIN),
+        "--node-name",
+        "pointcloud_map_loader",
+        "--node-namespace",
+        "/map",
+        "--param",
+        "enable_whole_load:=true",
+        "--param",
+        "enable_downsampled_whole_load:=false",
+        "--param",
+        "enable_partial_load:=true",
+        "--param",
+        "enable_selected_load:=false",
+        "--param",
+        shlex.quote(f"pcd_paths_or_directory:=[{pointcloud_map_path}]"),
+        "--param",
+        shlex.quote(f"pcd_metadata_path:={pointcloud_map_metadata_path}"),
+        "--remap",
+        "output/pointcloud_map:=/map/pointcloud_map",
+        "--remap",
+        "output/pointcloud_map_metadata:=/map/pointcloud_map_metadata",
+        "--remap",
+        "service/get_partial_pcd_map:=/map/get_partial_pointcloud_map",
+        "--remap",
+        "service/get_differential_pcd_map:=/map/get_differential_pointcloud_map",
+        "--remap",
+        "service/get_selected_pcd_map:=/map/get_selected_pointcloud_map",
+    ]
+    reload_steps.append(" ".join(load_arguments))
+
+    reload_command = prefix + " ; " + " ; ".join(reload_steps)
+
+    try:
+        reload_result = subprocess.run(
+            ["bash", "-lc", reload_command],
+            capture_output=True,
+            text=True,
+            timeout=AUTOWARE_MAP_COMPONENT_RELOAD_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "error": "timed out while reloading the pointcloud map loader component",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"failed to reload the pointcloud map loader component: {exc}",
+        }
+
+    if reload_result.returncode != 0:
+        error_message = (
+            (reload_result.stderr or "").strip()
+            or (reload_result.stdout or "").strip()
+            or "unknown ros2 component reload failure"
+        )
+        return {
+            "status": "error",
+            "error": error_message,
+            "component_uid": pointcloud_component_uid,
+        }
+
+    verify_command = (
+        prefix
+        + " ; ros2 topic info -v "
+        + shlex.quote(AUTOWARE_POINTCLOUD_MAP_TOPIC)
+    )
+    try:
+        verify_result = subprocess.run(
+            ["bash", "-lc", verify_command],
+            capture_output=True,
+            text=True,
+            timeout=AUTOWARE_MAP_RELOAD_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "error": "timed out while verifying the refreshed pointcloud map topic",
+        }
+
+    if (
+        verify_result.returncode != 0
+        or "Publisher count: 1" not in (verify_result.stdout or "")
+    ):
+        error_message = (
+            (verify_result.stderr or "").strip()
+            or (verify_result.stdout or "").strip()
+            or "pointcloud map topic did not report a publisher after the reload"
+        )
+        return {
+            "status": "error",
+            "error": error_message,
+            "component_uid": pointcloud_component_uid,
+        }
+
+    return {
+        "status": "ok",
+        "message": "Autoware pointcloud map loader was reloaded",
+        "component_uid": pointcloud_component_uid,
+        "pointcloud_map": str(pointcloud_map_path),
+        "pointcloud_map_metadata": str(pointcloud_map_metadata_path),
+        "topic": AUTOWARE_POINTCLOUD_MAP_TOPIC,
     }
 
 
@@ -2539,14 +2743,34 @@ def generate_map_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         encoding="utf-8",
     )
 
-    reload_result = (
-        reload_autoware_lanelet_map(output_dir)
-        if reload_autoware
-        else {
+    if reload_autoware:
+        lanelet_reload_result = reload_autoware_lanelet_map(output_dir)
+        if lanelet_reload_result.get("status") == "ok":
+            pointcloud_reload_result = reload_autoware_pointcloud_map(output_dir)
+            if pointcloud_reload_result.get("status") == "ok":
+                reload_result = {
+                    "status": "ok",
+                    "message": "Autoware lanelet and pointcloud maps were reloaded",
+                    "lanelet_reload": lanelet_reload_result,
+                    "pointcloud_reload": pointcloud_reload_result,
+                }
+            else:
+                reload_result = {
+                    "status": "error",
+                    "error": (
+                        "lanelet map reload succeeded, but pointcloud map reload failed: "
+                        + str(pointcloud_reload_result.get("error", "unknown error"))
+                    ),
+                    "lanelet_reload": lanelet_reload_result,
+                    "pointcloud_reload": pointcloud_reload_result,
+                }
+        else:
+            reload_result = lanelet_reload_result
+    else:
+        reload_result = {
             "status": "skipped",
             "message": "reload_autoware is false, so Autoware was not notified",
         }
-    )
     if publish_overlay:
         try:
             overlay_result = publish_satellite_overlay(payload, input_centerline_geo, map_origin)

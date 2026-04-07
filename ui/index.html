@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <title>Autoware 运行时控制</title>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAP6mOp2PxMDAl0nh-fmKEyWYZ1qdpzf7U&callback=initMap" async defer onerror="handleGoogleMapsLoadError()"></script>
+  <link rel="dns-prefetch" href="https://maps.googleapis.com">
+  <link rel="dns-prefetch" href="https://maps.gstatic.com">
+  <link rel="preconnect" href="https://maps.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://maps.gstatic.com" crossorigin>
   <script>
     var map;
     var marker;
@@ -24,9 +27,35 @@
     var responsiveUiObserver = null;
     var defaultMapViewStorageKey = 'autoware_ui_default_map_view';
     var vehicleStateRefreshIntervalMs = 500;
+    var defaultUiServerHost = '127.0.0.1';
+    var defaultUiServerPort = 8090;
+    var defaultRemoteWorkspaceRoot = '/mnt/data/xmt200/autoware.ez21';
+    var googleMapsApiKey = 'AIzaSyAP6mOp2PxMDAl0nh-fmKEyWYZ1qdpzf7U';
+    var googleMapsScriptRequested = false;
+    var staticMapPreviewView = null;
+    var staticMapPreviewSizePx = 512;
+    var previewHasAutoCenteredOnVehicle = false;
+
+    function getQueryParameter(name) {
+      try {
+        return new URLSearchParams(window.location.search).get(name);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function getRemoteWorkspaceRoot() {
+      var remoteRoot = getQueryParameter('remote_root') || defaultRemoteWorkspaceRoot;
+      return remoteRoot.replace(/\/+$/, '');
+    }
+
+    function uiServerUrl() {
+      return 'http://' + defaultUiServerHost + ':' + defaultUiServerPort + '/index.html';
+    }
 
     function uiServerCommand() {
-      return 'bash /media/nvidia/program/autoware.ez21/src/launcher/autoware_launch_ez21/ui/start_ui_server.sh 127.0.0.1 8090 false';
+      return 'bash ' + getRemoteWorkspaceRoot() + '/src/launcher/autoware_launch/ui/start_ui_server.sh '
+        + defaultUiServerHost + ' ' + defaultUiServerPort + ' false';
     }
 
     function reportStartupIssue(message) {
@@ -38,11 +67,133 @@
       }
 
       setMapStatus(message, true);
-      setRuntimeStatus('推荐先运行: ' + uiServerCommand() + ' ，再访问 http://127.0.0.1:8090/index.html', true);
+      setRuntimeStatus('推荐先运行: ' + uiServerCommand() + ' ，再访问 ' + uiServerUrl(), true);
     }
 
     function handleGoogleMapsLoadError() {
-      reportStartupIssue('Google Maps 加载失败，请确认当前机器能访问 maps.googleapis.com，并优先通过本地 UI server 打开页面。');
+      googleMapsScriptRequested = false;
+      if (!googleMapsLoaded) {
+        settingPath = false;
+        updateSetPathUi();
+      }
+      setMapSurfaceMode();
+      setMapStatus('Google 在线地图加载失败或过慢，当前保留轻量预览模式。', true);
+      setRuntimeStatus('需要交互选点时，请确认本机浏览器能访问 maps.googleapis.com 后再点“在线地图”。', true);
+    }
+
+    function updateSetPathUi() {
+      var setPathButton = document.getElementById('set-path-button');
+      if (!setPathButton) {
+        return;
+      }
+
+      setPathButton.classList.toggle('active', !!settingPath);
+      document.getElementById('map').classList.toggle('crosshair-cursor', !!settingPath);
+    }
+
+    function getCurrentMapView() {
+      if (googleMapsLoaded && map) {
+        return {
+          center: {
+            lat: map.getCenter().lat(),
+            lng: map.getCenter().lng()
+          },
+          zoom: map.getZoom()
+        };
+      }
+
+      if (staticMapPreviewView) {
+        return {
+          center: {
+            lat: staticMapPreviewView.center.lat,
+            lng: staticMapPreviewView.center.lng
+          },
+          zoom: staticMapPreviewView.zoom
+        };
+      }
+
+      return getInitialMapView();
+    }
+
+    function buildStaticMapPreviewUrl(view) {
+      return 'https://maps.googleapis.com/maps/api/staticmap'
+        + '?center=' + encodeURIComponent(view.center.lat.toFixed(7) + ',' + view.center.lng.toFixed(7))
+        + '&zoom=' + encodeURIComponent(String(view.zoom))
+        + '&size=' + staticMapPreviewSizePx + 'x' + staticMapPreviewSizePx
+        + '&maptype=satellite'
+        + '&format=jpg'
+        + '&key=' + encodeURIComponent(googleMapsApiKey);
+    }
+
+    function setMapSurfaceMode() {
+      var googleMap = document.getElementById('google-map');
+      var staticPreview = document.getElementById('map-preview-image');
+      var staticHint = document.getElementById('map-preview-hint');
+      var loadGoogleButton = document.getElementById('load-google-map-button');
+
+      if (!googleMap || !staticPreview || !staticHint || !loadGoogleButton) {
+        return;
+      }
+
+      googleMap.classList.toggle('visible', !!googleMapsLoaded);
+      staticPreview.classList.toggle('visible', !googleMapsLoaded);
+      staticHint.classList.toggle('visible', !googleMapsLoaded);
+      loadGoogleButton.disabled = !!googleMapsLoaded || !!googleMapsScriptRequested;
+      loadGoogleButton.textContent = googleMapsLoaded ? '在线地图已启用' : (googleMapsScriptRequested ? '在线地图加载中' : '在线地图');
+    }
+
+    function refreshStaticMapPreview(view) {
+      var previewView = view || getCurrentMapView();
+      var previewImage = document.getElementById('map-preview-image');
+      var previewHint = document.getElementById('map-preview-hint');
+
+      if (!previewImage || !previewHint) {
+        return;
+      }
+
+      staticMapPreviewView = {
+        center: {
+          lat: previewView.center.lat,
+          lng: previewView.center.lng
+        },
+        zoom: previewView.zoom
+      };
+
+      previewHint.textContent = '正在加载轻量卫星预览。需要交互选点时，再点“在线地图”。';
+      previewImage.onload = function() {
+        previewHint.textContent = '当前正在使用轻量卫星预览。需要交互选点时，再点左下角“在线地图”。';
+      };
+      previewImage.onerror = function() {
+        previewHint.textContent = '轻量卫星预览加载失败。你可以稍后重试，或直接切到“在线地图”。';
+      };
+      previewImage.src = buildStaticMapPreviewUrl(staticMapPreviewView);
+      setMapSurfaceMode();
+    }
+
+    function loadGoogleMap() {
+      if (googleMapsLoaded) {
+        setMapSurfaceMode();
+        setMapStatus('Google 在线地图已可用。', false);
+        return;
+      }
+
+      if (googleMapsScriptRequested) {
+        setMapStatus('正在加载 Google 在线地图...', false);
+        return;
+      }
+
+      googleMapsScriptRequested = true;
+      setMapSurfaceMode();
+      setMapStatus('正在加载 Google 在线地图...', false);
+
+      var script = document.createElement('script');
+      script.src = 'https://maps.googleapis.com/maps/api/js?key='
+        + encodeURIComponent(googleMapsApiKey)
+        + '&callback=initMap&loading=async';
+      script.async = true;
+      script.defer = true;
+      script.onerror = handleGoogleMapsLoadError;
+      document.head.appendChild(script);
     }
 
     function loadDefaultMapView() {
@@ -98,9 +249,10 @@
     }
 
     function initMap() {
-      var initialMapView = getInitialMapView();
+      var initialMapView = getCurrentMapView();
       googleMapsLoaded = true;
-      map = new google.maps.Map(document.getElementById('map'), {
+      googleMapsScriptRequested = false;
+      map = new google.maps.Map(document.getElementById('google-map'), {
         center: initialMapView.center,
         zoom: initialMapView.zoom,
         mapTypeId: 'satellite'
@@ -117,6 +269,10 @@
           displayPathPoints();
         }
       });
+
+      setMapSurfaceMode();
+      updateSetPathUi();
+      setMapStatus('Google 在线地图已加载完成。', false);
     }
 
     function addPathPoint(latLng) {
@@ -428,6 +584,13 @@
       }
 
       latestVehicleGeoPosition = {lat: lat, lng: lng};
+      if (!googleMapsLoaded && !previewHasAutoCenteredOnVehicle) {
+        previewHasAutoCenteredOnVehicle = true;
+        refreshStaticMapPreview({
+          center: latestVehicleGeoPosition,
+          zoom: 18
+        });
+      }
       if (!googleMapsLoaded || !map) {
         return;
       }
@@ -473,13 +636,26 @@
     }
 
     function moveToLatestLocation() {
-      if (!googleMapsLoaded || !map) {
-        setMapStatus('地图尚未加载完成。', true);
+      if (!latestVehicleGeoPosition) {
+        setMapStatus('还没有收到可显示的车辆经纬度，无法居中显示。', true);
         return;
       }
 
-      if (!latestVehicleGeoPosition) {
-        setMapStatus('还没有收到可显示的车辆经纬度，无法居中显示。', true);
+      if (!googleMapsLoaded || !map) {
+        staticMapPreviewView = {
+          center: {
+            lat: latestVehicleGeoPosition.lat,
+            lng: latestVehicleGeoPosition.lng
+          },
+          zoom: 18
+        };
+        refreshStaticMapPreview(staticMapPreviewView);
+        if (saveDefaultMapView(latestVehicleGeoPosition, 18)) {
+          setMapStatus('已更新轻量地图预览，并设置为默认显示位置。', false);
+          return;
+        }
+
+        setMapStatus('已更新轻量地图预览，但默认显示位置保存失败。', true);
         return;
       }
 
@@ -495,7 +671,8 @@
 
     function addCurrentVehiclePositionAsPathPoint() {
       if (!googleMapsLoaded || !map) {
-        setMapStatus('地图尚未加载完成，暂时无法添加当前位置为路径点。', true);
+        setMapStatus('添加路径点需要在线地图，正在为你加载 Google 地图。', false);
+        loadGoogleMap();
         return;
       }
 
@@ -512,16 +689,16 @@
     }
 
     function toggleSetPath() {
-      settingPath = !settingPath;
-      var setPathButton = document.getElementById('set-path-button');
-      setPathButton.classList.toggle('active');
-
-      if (settingPath) {
-        document.getElementById('map').classList.add('crosshair-cursor');
+      if (!googleMapsLoaded || !map) {
+        settingPath = true;
+        updateSetPathUi();
+        setMapStatus('选择路径点需要在线地图，正在加载 Google 地图。', false);
+        loadGoogleMap();
         return;
       }
 
-      document.getElementById('map').classList.remove('crosshair-cursor');
+      settingPath = !settingPath;
+      updateSetPathUi();
     }
 
     function setMapStatus(message, isError) {
@@ -723,12 +900,12 @@
           var reloadResult = data.autoware_reload || {};
 
           if (reloadResult.status === 'ok') {
-            setMapStatus('已刷新 Autoware 车道线，当前地图目录: ' + data.output_dir, false);
+            setMapStatus((reloadResult.message || '已刷新 Autoware 地图') + '，当前地图目录: ' + data.output_dir, false);
             return;
           }
 
           if (reloadResult.status === 'error') {
-            setMapStatus('地图已生成，但刷新 Autoware 失败: ' + reloadResult.error, true);
+            setMapStatus('地图已生成，但刷新 Autoware 失败: ' + (reloadResult.error || '未知错误'), true);
             return;
           }
 
@@ -794,16 +971,18 @@
     window.addEventListener('load', function() {
       setupResponsiveUi();
       displayPathPoints();
+      setMapSurfaceMode();
+      refreshStaticMapPreview(getInitialMapView());
 
       if (window.location.protocol === 'file:') {
         reportStartupIssue('当前页面是直接从本地文件打开的，地图和后端联动可能异常。');
       }
 
-      window.setTimeout(function() {
-        if (!googleMapsLoaded) {
-          handleGoogleMapsLoadError();
-        }
-      }, 4000);
+      if (getQueryParameter('map_mode') === 'google') {
+        loadGoogleMap();
+      } else {
+        setMapStatus('默认使用轻量卫星预览，不首屏加载 Google 地图。需要交互选点时，再点“在线地图”。', false);
+      }
 
       refreshVehicleState();
       refreshAutowareStatus();
@@ -845,7 +1024,70 @@
     }
 
     #map {
+      position: relative;
       height: 100%;
+      overflow: hidden;
+      background: #d9dde3;
+    }
+
+    #google-map,
+    #map-preview-image,
+    #map-preview-hint {
+      position: absolute;
+      inset: 0;
+    }
+
+    #google-map {
+      display: none;
+      z-index: 0;
+    }
+
+    #google-map.visible {
+      display: block;
+    }
+
+    #map-preview-image {
+      display: none;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0;
+    }
+
+    #map-preview-image.visible {
+      display: block;
+    }
+
+    #map-preview-hint {
+      display: none;
+      align-items: flex-end;
+      justify-content: center;
+      padding: calc(18px * var(--ui-scale));
+      box-sizing: border-box;
+      background: linear-gradient(180deg, rgba(6, 15, 28, 0.08) 0%, rgba(6, 15, 28, 0.48) 100%);
+      color: #fff;
+      text-align: center;
+      font-size: calc(13px * var(--ui-scale));
+      line-height: 1.45;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    #map-preview-hint.visible {
+      display: flex;
+    }
+
+    #map-surface-actions {
+      position: absolute;
+      left: var(--edge-gap);
+      bottom: var(--edge-gap);
+      display: flex;
+      gap: calc(8px * var(--ui-scale));
+      z-index: 2;
+    }
+
+    .secondary-button {
+      background-color: rgba(255, 255, 255, 0.96);
     }
 
     #toolbar {
@@ -885,7 +1127,8 @@
       opacity: 0.6;
     }
 
-    .crosshair-cursor {
+    .crosshair-cursor,
+    .crosshair-cursor #google-map {
       cursor: crosshair;
     }
 
@@ -964,7 +1207,17 @@
   </style>
 </head>
 <body>
-  <div id="map"></div>
+  <div id="map">
+    <div id="google-map"></div>
+    <img id="map-preview-image" alt="Satellite preview">
+    <div id="map-preview-hint">
+      当前默认使用轻量卫星预览。需要交互选点时，再点左下角“在线地图”。
+    </div>
+    <div id="map-surface-actions">
+      <button id="load-google-map-button" class="large-button secondary-button" onclick="loadGoogleMap()">在线地图</button>
+      <button class="large-button secondary-button" onclick="refreshStaticMapPreview()">刷新预览</button>
+    </div>
+  </div>
 
   <div id="toolbar">
     <button id="set-path-button" class="large-button" onclick="toggleSetPath()">设置路径</button>

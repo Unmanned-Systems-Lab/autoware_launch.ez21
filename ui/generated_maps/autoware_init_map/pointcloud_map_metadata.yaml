@@ -1,5 +1,5 @@
-x_resolution: 39
-y_resolution: 15
+x_resolution: 26
+y_resolution: 13
 pointcloud_map.pcd:
-- -28
-- -12
+- -24
+- -10
