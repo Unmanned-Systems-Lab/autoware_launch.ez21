@@ -26,6 +26,8 @@ from autoware_adapi_v1_msgs.msg import RouteState
 from autoware_adapi_v1_msgs.srv import ChangeOperationMode
 from autoware_adapi_v1_msgs.srv import ClearRoute
 from autoware_adapi_v1_msgs.srv import SetRoutePoints
+from autoware_planning_msgs.msg import LaneletRoute
+from autoware_planning_msgs.msg import Trajectory
 from autoware_localization_msgs.srv import InitializeLocalization
 from geometry_msgs.msg import Point
 from geometry_msgs.msg import Pose
@@ -96,6 +98,12 @@ DEFAULT_PCD_LATERAL_STEP_M = 0.5
 AUTOWARE_ROUTE_SET_SERVICE = "/api/routing/set_route_points"
 AUTOWARE_ROUTE_CLEAR_SERVICE = "/api/routing/clear_route"
 AUTOWARE_ROUTE_STATE_TOPIC = "/api/routing/state"
+AUTOWARE_MISSION_PLANNING_ROUTE_TOPIC = "/planning/mission_planning/route"
+AUTOWARE_PLANNING_ROUTE_TOPIC = "/planning/route"
+AUTOWARE_MISSION_PLANNING_ROUTE_MARKER_TOPIC = "/planning/mission_planning/route_marker"
+AUTOWARE_SCENARIO_PLANNING_TRAJECTORY_TOPIC = "/planning/scenario_planning/trajectory"
+AUTOWARE_VELOCITY_SMOOTHER_TRAJECTORY_TOPIC = "/planning/scenario_planning/velocity_smoother/trajectory"
+AUTOWARE_PLANNING_TRAJECTORY_TOPIC = "/planning/trajectory"
 AUTOWARE_OPERATION_MODE_STATE_TOPIC = "/api/operation_mode/state"
 AUTOWARE_CHANGE_TO_AUTONOMOUS_SERVICE = "/api/operation_mode/change_to_autonomous"
 AUTOWARE_CHANGE_TO_STOP_SERVICE = "/api/operation_mode/change_to_stop"
@@ -107,6 +115,7 @@ INS_RAW_GPS_TOPIC = "/sensing/ins/raw_nav_sat_fix"
 AUTOWARE_ROUTE_SERVICE_TIMEOUT_S = 10.0
 AUTOWARE_OPERATION_MODE_TIMEOUT_S = 5.0
 AUTOWARE_LOCALIZATION_TIMEOUT_S = 5.0
+AUTOWARE_RESET_WAIT_TIMEOUT_S = 30.0
 ORIGIN_SYNC_DISCOVERY_TIMEOUT_S = 0.2
 
 OPERATION_MODE_LABELS = {
@@ -137,6 +146,7 @@ def is_invalid_ros_context_error(exc: Exception) -> bool:
     message = str(exc)
     return (
         "context is not valid" in message
+        or "context is invalid" in message
         or "rcl_shutdown()" in message
         or "rcl_init() was not called" in message
     )
@@ -221,6 +231,110 @@ class RvizMarkerPublisher:
 
 
 RVIZ_MARKER_PUBLISHER = RvizMarkerPublisher()
+
+
+class PlanningResetPublisher:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._node: Node | None = None
+        self._mission_route_publisher = None
+        self._planning_route_publisher = None
+        self._route_marker_publisher = None
+        self._scenario_trajectory_publisher = None
+        self._velocity_smoother_trajectory_publisher = None
+        self._planning_trajectory_publisher = None
+        self._initialized = False
+
+    def _ensure_ready(self) -> None:
+        if self._initialized:
+            return
+
+        with self._lock:
+            if self._initialized:
+                return
+
+            if not rclpy.ok():
+                rclpy.init(args=None)
+
+            self._node = Node("ui_autoware_reset_publisher")
+            transient_qos = QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                reliability=ReliabilityPolicy.RELIABLE,
+            )
+            volatile_qos = QoSProfile(
+                depth=1,
+                durability=DurabilityPolicy.VOLATILE,
+                reliability=ReliabilityPolicy.RELIABLE,
+            )
+            self._mission_route_publisher = self._node.create_publisher(
+                LaneletRoute, AUTOWARE_MISSION_PLANNING_ROUTE_TOPIC, transient_qos
+            )
+            self._planning_route_publisher = self._node.create_publisher(
+                LaneletRoute, AUTOWARE_PLANNING_ROUTE_TOPIC, transient_qos
+            )
+            self._route_marker_publisher = self._node.create_publisher(
+                MarkerArray, AUTOWARE_MISSION_PLANNING_ROUTE_MARKER_TOPIC, transient_qos
+            )
+            self._scenario_trajectory_publisher = self._node.create_publisher(
+                Trajectory, AUTOWARE_SCENARIO_PLANNING_TRAJECTORY_TOPIC, volatile_qos
+            )
+            self._velocity_smoother_trajectory_publisher = self._node.create_publisher(
+                Trajectory, AUTOWARE_VELOCITY_SMOOTHER_TRAJECTORY_TOPIC, volatile_qos
+            )
+            self._planning_trajectory_publisher = self._node.create_publisher(
+                Trajectory, AUTOWARE_PLANNING_TRAJECTORY_TOPIC, volatile_qos
+            )
+            self._initialized = True
+
+    def publish_reset(self) -> dict[str, Any]:
+        self._ensure_ready()
+        assert self._mission_route_publisher is not None
+        assert self._planning_route_publisher is not None
+        assert self._route_marker_publisher is not None
+        assert self._scenario_trajectory_publisher is not None
+        assert self._velocity_smoother_trajectory_publisher is not None
+        assert self._planning_trajectory_publisher is not None
+
+        empty_route = LaneletRoute()
+        empty_route.header.frame_id = "map"
+
+        empty_trajectory = Trajectory()
+        empty_trajectory.header.frame_id = "map"
+
+        delete_all_marker = Marker()
+        delete_all_marker.header.frame_id = "map"
+        delete_all_marker.action = Marker.DELETEALL
+
+        delete_all_markers = MarkerArray()
+        delete_all_markers.markers.append(delete_all_marker)
+
+        with self._lock:
+            for _ in range(5):
+                self._mission_route_publisher.publish(empty_route)
+                self._planning_route_publisher.publish(empty_route)
+                self._route_marker_publisher.publish(delete_all_markers)
+                self._scenario_trajectory_publisher.publish(empty_trajectory)
+                self._velocity_smoother_trajectory_publisher.publish(empty_trajectory)
+                self._planning_trajectory_publisher.publish(empty_trajectory)
+                time.sleep(0.1)
+
+        return {
+            "status": "ok",
+            "route_topics": [
+                AUTOWARE_MISSION_PLANNING_ROUTE_TOPIC,
+                AUTOWARE_PLANNING_ROUTE_TOPIC,
+            ],
+            "marker_topics": [AUTOWARE_MISSION_PLANNING_ROUTE_MARKER_TOPIC],
+            "trajectory_topics": [
+                AUTOWARE_SCENARIO_PLANNING_TRAJECTORY_TOPIC,
+                AUTOWARE_VELOCITY_SMOOTHER_TRAJECTORY_TOPIC,
+                AUTOWARE_PLANNING_TRAJECTORY_TOPIC,
+            ],
+        }
+
+
+PLANNING_RESET_PUBLISHER = PlanningResetPublisher()
 
 
 class InsOriginUpdater:
@@ -438,12 +552,32 @@ class AutowareRuntimeClient:
         self._initialized = False
 
     def _ensure_ready(self) -> None:
-        if self._initialized:
+        if self._initialized and self._node is not None and rclpy.ok():
             return
 
         with self._init_lock:
-            if self._initialized:
+            if self._initialized and self._node is not None and rclpy.ok():
                 return
+
+            if self._node is not None:
+                try:
+                    self._node.destroy_node()
+                except Exception:
+                    pass
+
+            self._node = None
+            self._route_client = None
+            self._clear_route_client = None
+            self._change_to_autonomous_client = None
+            self._change_to_stop_client = None
+            self._enable_control_client = None
+            self._disable_control_client = None
+            self._localization_initialize_client = None
+            self._route_state_subscription = None
+            self._operation_mode_state_subscription = None
+            self._kinematic_state_subscription = None
+            self._raw_gps_subscription = None
+            self._initialized = False
 
             if not rclpy.ok():
                 rclpy.init(args=None)
@@ -1025,6 +1159,107 @@ class AutowareRuntimeClient:
         return {
             "status": result["status"],
             "disable_autoware_control": result,
+        }
+
+    def reset_for_route_planning(
+        self, wait_timeout_s: float = AUTOWARE_RESET_WAIT_TIMEOUT_S
+    ) -> dict[str, Any]:
+        self._ensure_ready()
+        assert self._change_to_stop_client is not None
+        assert self._disable_control_client is not None
+        assert self._clear_route_client is not None
+        assert self._node is not None
+
+        wait_timeout_s = max(0.0, float(wait_timeout_s))
+        operation_timeout_s = max(wait_timeout_s, AUTOWARE_OPERATION_MODE_TIMEOUT_S)
+        route_timeout_s = max(wait_timeout_s, AUTOWARE_ROUTE_SERVICE_TIMEOUT_S)
+
+        with self._client_lock:
+            stop_result = self._call_service_locked(
+                self._change_to_stop_client,
+                AUTOWARE_CHANGE_TO_STOP_SERVICE,
+                ChangeOperationMode.Request(),
+                operation_timeout_s,
+            )
+            disable_control_result = self._call_service_locked(
+                self._disable_control_client,
+                AUTOWARE_DISABLE_CONTROL_SERVICE,
+                ChangeOperationMode.Request(),
+                operation_timeout_s,
+            )
+            clear_route_result = self._call_service_locked(
+                self._clear_route_client,
+                AUTOWARE_ROUTE_CLEAR_SERVICE,
+                ClearRoute.Request(),
+                route_timeout_s,
+            )
+            self._spin_locked(0.2)
+
+        try:
+            rviz_cleanup_result = PLANNING_RESET_PUBLISHER.publish_reset()
+        except Exception as exc:
+            rviz_cleanup_result = {
+                "status": "error",
+                "error": f"failed to publish reset cleanup topics: {exc}",
+            }
+
+        deadline = time.monotonic() + min(wait_timeout_s, 3.0)
+        snapshot = None
+        while True:
+            snapshot = self.snapshot()
+            route_state = snapshot.get("route_state", {})
+            operation_mode = snapshot.get("operation_mode", {})
+            if route_state.get("label") == "UNSET" and operation_mode.get("label") == "STOP":
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.2)
+
+        assert snapshot is not None
+        route_state = snapshot.get("route_state", {})
+        operation_mode = snapshot.get("operation_mode", {})
+
+        verification_issues = []
+        if route_state.get("label") != "UNSET":
+            verification_issues.append(
+                f"route_state={route_state.get('label', 'UNKNOWN')}"
+            )
+        if operation_mode.get("label") != "STOP":
+            verification_issues.append(
+                f"operation_mode={operation_mode.get('label', 'UNKNOWN')}"
+            )
+        if rviz_cleanup_result.get("status") != "ok":
+            verification_issues.append(
+                rviz_cleanup_result.get("error", "rviz_cleanup_failed")
+            )
+
+        results = {
+            "change_to_stop": stop_result,
+            "disable_autoware_control": disable_control_result,
+            "clear_route": clear_route_result,
+            "rviz_cleanup": rviz_cleanup_result,
+        }
+        success_count = sum(1 for result in results.values() if result.get("status") == "ok")
+        failed_actions = [
+            action_name for action_name, result in results.items() if result.get("status") != "ok"
+        ]
+        overall_status = "ok"
+        if success_count == 0:
+            overall_status = "error"
+        elif failed_actions or verification_issues:
+            overall_status = "partial"
+
+        return {
+            "status": overall_status,
+            "target_state": "ready_for_route_planning",
+            "wait_timeout_s": wait_timeout_s,
+            "change_to_stop": stop_result,
+            "disable_autoware_control": disable_control_result,
+            "clear_route": clear_route_result,
+            "rviz_cleanup": rviz_cleanup_result,
+            "failed_actions": failed_actions,
+            "verification_issues": verification_issues,
+            "autoware_status": snapshot,
         }
 
     def is_localization_initialize_available(self, timeout_s: float = 0.0) -> bool:
@@ -2881,6 +3116,60 @@ def disable_autoware_control_from_payload(_payload: dict[str, Any]) -> dict[str,
     return AUTOWARE_RUNTIME_CLIENT.disable_autoware_control()
 
 
+def run_reset_autoware_once(wait_timeout_s: float) -> dict[str, Any]:
+    client = AutowareRuntimeClient()
+    return client.reset_for_route_planning(wait_timeout_s=wait_timeout_s)
+
+
+def reset_autoware_via_subprocess(wait_timeout_s: float) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--reset-autoware",
+        str(wait_timeout_s),
+    ]
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=max(wait_timeout_s + 15.0, 30.0),
+        check=False,
+    )
+
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    if not stdout:
+        raise MapGenerationError(
+            "reset subprocess did not return JSON"
+            + (f": {stderr}" if stderr else "")
+        )
+
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise MapGenerationError(
+            "invalid JSON from reset subprocess: " + stdout[-400:]
+        ) from exc
+
+    if completed.returncode not in (0, 1):
+        raise MapGenerationError(
+            result.get("error")
+            or stderr
+            or f"reset subprocess failed with exit code {completed.returncode}"
+        )
+
+    return result
+
+
+def reset_autoware_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    wait_timeout_raw = payload.get("wait_timeout_s", AUTOWARE_RESET_WAIT_TIMEOUT_S)
+    try:
+        wait_timeout_s = float(wait_timeout_raw)
+    except (TypeError, ValueError) as exc:
+        raise MapGenerationError("wait_timeout_s must be a number") from exc
+    return reset_autoware_via_subprocess(wait_timeout_s=wait_timeout_s)
+
+
 class MapRequestHandler(SimpleHTTPRequestHandler):
     server_version = "AutowareMapBootstrap/1.1"
     extensions_map = {
@@ -2919,7 +3208,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                         "message": (
                             "POST /generate_map, /publish_satellite_overlay, /update_ins_origin, "
                             "/set_route, /clear_route, /change_to_autonomous, /change_to_stop, "
-                            "/enable_autoware_control, /disable_autoware_control, or GET /vehicle_state"
+                            "/enable_autoware_control, /disable_autoware_control, /reset_autoware, or GET /vehicle_state"
                         ),
                         "default_output_root": str(DEFAULT_OUTPUT_ROOT),
                     },
@@ -2957,6 +3246,7 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 "/change_to_stop",
                 "/enable_autoware_control",
                 "/disable_autoware_control",
+                "/reset_autoware",
             }:
                 self._send_json(404, {"status": "error", "error": "unknown endpoint"})
                 return
@@ -2983,8 +3273,10 @@ class MapRequestHandler(SimpleHTTPRequestHandler):
                 result = change_to_stop_from_payload(payload)
             elif request_path == "/enable_autoware_control":
                 result = enable_autoware_control_from_payload(payload)
-            else:
+            elif request_path == "/disable_autoware_control":
                 result = disable_autoware_control_from_payload(payload)
+            else:
+                result = reset_autoware_from_payload(payload)
         except MapGenerationError as exc:
             self._send_json(400, {"status": "error", "error": str(exc)})
             return
@@ -3079,7 +3371,17 @@ def main() -> int:
     )
     parser.add_argument("--host", default="127.0.0.1", help="HTTP server bind address.")
     parser.add_argument("--port", type=int, default=8090, help="HTTP server port.")
+    parser.add_argument(
+        "--reset-autoware",
+        type=float,
+        help="Run a one-shot Autoware reset in a fresh process and print JSON.",
+    )
     args = parser.parse_args()
+
+    if args.reset_autoware is not None:
+        result = run_reset_autoware_once(args.reset_autoware)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") in {"ok", "partial"} else 1
 
     if args.input_json:
         payload = load_payload(args.input_json)

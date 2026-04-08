@@ -6,7 +6,7 @@
         suppress_sudden_stop: false
 
       stop_planning:
-        stop_margin : 5.0 # longitudinal margin to obstacle [m]
+        stop_margin : 3.0 # longitudinal margin to obstacle [m]
         terminal_stop_margin : 3.0 # Stop margin at the goal. This value cannot exceed stop margin. [m]
         min_behavior_stop_margin: 3.0 # [m]
         behavior_stop_margin_hold_time: 2.0 # [s] time to hold the min_behavior_stop_margin after disappearing the behavior stop point
@@ -54,7 +54,7 @@
       obstacle_filtering: # All parameters under this namespace can be set for each object type. If you want to set a value different from the default, please add a line.
         check_inside: # If true, the planner checks if the obstacle is inside the ego's footprint; can be tuned for each object type
           default: true
-          pointcloud: false
+          pointcloud: true
         check_outside: # If true, the planner checks if the obstacle is outside the ego's footprint. pointcloud obstacles are not supported.
           default: true
           unknown: false

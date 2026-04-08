@@ -14,21 +14,21 @@
   "pcd_lateral_step_m": 0.5,
   "origin_source": "current_vehicle_gps_and_local_pose",
   "origin": {
-    "latitude": 29.591614711104988,
-    "longitude": 121.98686233891185,
+    "latitude": 29.591629136261872,
+    "longitude": 121.98691125276022,
     "altitude": 0.0
   },
   "generation_anchor": {
     "source": "current_vehicle_gps_and_local_pose",
     "geo": {
-      "latitude": 29.591616,
-      "longitude": 121.98685959999999,
-      "altitude": 21.25
+      "latitude": 29.591630799999997,
+      "longitude": 121.9869093,
+      "altitude": 21.182000000000002
     },
     "local": {
-      "x": -0.26534272670858017,
-      "y": 0.1428683231251286,
-      "z": -0.350973682266853
+      "x": -0.1891812074336429,
+      "y": 0.1844180314228045,
+      "z": -0.3131022999789272
     }
   },
   "point_count": 2,
@@ -39,12 +39,12 @@
     "update_ins_origin": false,
     "data": [
       {
-        "latitude": 29.5916163,
-        "longitude": 121.98685959999999
+        "latitude": 29.591661409457835,
+        "longitude": 121.98700218313671
       },
       {
-        "latitude": 29.591536890639386,
-        "longitude": 121.9866287829244
+        "latitude": 29.59155995174997,
+        "longitude": 121.98673932665325
       }
     ]
   }

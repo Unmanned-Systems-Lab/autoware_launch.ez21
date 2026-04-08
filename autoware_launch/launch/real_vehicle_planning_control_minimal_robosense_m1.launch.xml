@@ -15,7 +15,7 @@
   <!-- launch module preset -->
   <arg
     name="planning_module_preset"
-    default="robosense_m1_low_load"
+    default="robosense_m1_obstacle_stop_inlane_avoidance"
     description="planning module preset"
   />
   <arg name="control_module_preset" default="real_vehicle_minimal" description="control module preset"/>
@@ -187,9 +187,9 @@
     <arg name="data_path" value="$(var data_path)"/>
     <arg name="pointcloud_container_name" value="$(var pointcloud_container_name)"/>
     <arg name="launch_pointcloud_container" value="false"/>
-    <arg name="use_empty_dynamic_object_publisher" value="true"/>
+    <arg name="use_empty_dynamic_object_publisher" value="false"/>
     <arg name="use_traffic_light_recognition" value="$(var use_traffic_light_recognition)"/>
-    <arg name="lidar_detection_model" value="centerpoint/centerpoint_tiny"/>
+    <arg name="lidar_detection_model" value="clustering"/>
     <arg name="use_multi_channel_tracker_merger" value="false"/>
     <arg name="use_obstacle_segmentation_time_series_filter" value="false"/>
     <arg name="use_cuda_ground_segmentation" value="$(var use_cuda_ground_segmentation)"/>

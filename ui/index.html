@@ -421,9 +421,7 @@
       var rightPanelBaseWidth = 340 * scale;
       var twoColumnAvailableWidth = Math.max(160, (window.innerWidth - edgeGap * 3) / 2);
       var centeredPanelMaxWidth = Math.max(260, window.innerWidth - edgeGap * 4);
-      var toolbar = document.getElementById('toolbar');
-      var mapStatus = document.getElementById('map-status');
-      var runtimeStatus = document.getElementById('runtime-status');
+      var statusStack = document.getElementById('status-stack');
       var autowarePanel = document.getElementById('autoware-panel');
 
       root.style.setProperty('--left-panel-width', Math.min(leftPanelBaseWidth, twoColumnAvailableWidth) + 'px');
@@ -433,16 +431,13 @@
         Math.min(720 * scale, centeredPanelMaxWidth) + 'px'
       );
 
-      if (toolbar && mapStatus && runtimeStatus) {
-        var mapStatusTop = edgeGap + toolbar.offsetHeight + edgeGap;
-        var runtimeStatusTop = mapStatusTop + mapStatus.offsetHeight + edgeGap;
-        root.style.setProperty('--map-status-top', mapStatusTop + 'px');
-        root.style.setProperty('--runtime-status-top', runtimeStatusTop + 'px');
-      }
-
       if (autowarePanel) {
         var pathPanelTop = edgeGap * 2 + autowarePanel.offsetHeight;
-        var pathPanelMaxHeight = Math.max(180, window.innerHeight - pathPanelTop - edgeGap);
+        var reservedBottomSpace = edgeGap;
+        if (statusStack) {
+          reservedBottomSpace += statusStack.offsetHeight + edgeGap;
+        }
+        var pathPanelMaxHeight = Math.max(180, window.innerHeight - pathPanelTop - reservedBottomSpace);
         root.style.setProperty('--path-panel-top', pathPanelTop + 'px');
         root.style.setProperty('--path-panel-max-height', pathPanelMaxHeight + 'px');
       }
@@ -827,6 +822,64 @@
         });
     }
 
+    function resetAutoware() {
+      setRuntimeStatus('正在复位 Autoware 状态，并等待进入可重新规划状态...', false);
+      apiRequest('/reset_autoware', {
+        "wait_timeout_s": 30.0
+      })
+        .then(function(result) {
+          var stopResult = result.change_to_stop || {};
+          var disableControlResult = result.disable_autoware_control || {};
+          var clearRouteResult = result.clear_route || {};
+          var failures = [];
+
+          clearPathPreview();
+          settingPath = false;
+          updateSetPathUi();
+
+          [
+            {label: 'STOP', result: stopResult},
+            {label: '取消接管', result: disableControlResult},
+            {label: '清路线', result: clearRouteResult}
+          ].forEach(function(item) {
+            if (item.result.status === 'ok') {
+              return;
+            }
+            failures.push(item.label + '=' + (item.result.error || item.result.message || '失败'));
+          });
+
+          if (result.status === 'ok') {
+            setRuntimeStatus('Autoware 已复位。请重新设置起点和终点，并下发路线。', false);
+            return;
+          }
+
+          if (Array.isArray(result.verification_issues)) {
+            result.verification_issues.forEach(function(issue) {
+              failures.push(issue);
+            });
+          }
+
+          if (result.status === 'partial') {
+            setRuntimeStatus(
+              'Autoware 已部分复位，本地选点已清空。未完成项: ' + failures.join('；') + '。如系统仍在启动，可稍后再按一次“复位”。',
+              true
+            );
+            return;
+          }
+
+          throw new Error(failures.join('；') || result.error || result.message || '复位失败');
+        })
+        .catch(function(error) {
+          clearPathPreview();
+          settingPath = false;
+          updateSetPathUi();
+          setRuntimeStatus('Autoware 复位失败: ' + error.message + '。本地选点已清空，可重新设置起点和终点。', true);
+        })
+        .finally(function() {
+          refreshAutowareStatus();
+        });
+    }
+
     function enterAutonomousMode() {
       setRuntimeStatus('正在切换到 AUTONOMOUS，并启用 Autoware control...', false);
       apiRequest('/change_to_autonomous', {})
@@ -1175,18 +1228,31 @@
       overflow-y: auto;
     }
 
-    .status-panel {
+    #status-stack {
       position: absolute;
-      left: 50%;
-      transform: translateX(-50%);
+      right: var(--edge-gap);
+      bottom: var(--edge-gap);
+      display: flex;
+      flex-direction: column;
+      gap: calc(8px * var(--ui-scale));
+      width: min(var(--right-panel-width), var(--status-panel-max-width));
+      max-width: calc(100vw - var(--edge-gap) * 2);
+      z-index: 2;
+    }
+
+    .status-panel {
+      position: relative;
+      left: auto;
+      transform: none;
       background-color: rgba(255, 255, 255, 0.95);
       padding: var(--status-padding-y) var(--status-padding-x);
       border: 1px solid #999;
       border-radius: var(--panel-radius);
       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-      width: calc(100vw - var(--edge-gap) * 4);
-      max-width: var(--status-panel-max-width);
-      text-align: center;
+      width: 100%;
+      max-width: none;
+      box-sizing: border-box;
+      text-align: left;
       font-size: var(--status-font-size);
       line-height: 1.35;
       z-index: 2;
@@ -1197,12 +1263,9 @@
       border-color: #b00020;
     }
 
-    #map-status {
-      top: var(--map-status-top);
-    }
-
+    #map-status,
     #runtime-status {
-      top: var(--runtime-status-top);
+      top: auto;
     }
   </style>
 </head>
@@ -1224,6 +1287,7 @@
     <button class="large-button" onclick="addCurrentVehiclePositionAsPathPoint()">添加当前位置</button>
     <button class="large-button" onclick="sendRouteToAutoware()">下发路线</button>
     <button class="large-button" onclick="clearAutowareRoute()">清除路线</button>
+    <button class="large-button" onclick="resetAutoware()">复位</button>
     <button class="large-button" onclick="syncInsReferencePointFromPath()">同步定位原点</button>
     <button id="generate-autoware-map-button" class="large-button" onclick="generateAutowareMap()">生成并刷新地图</button>
     <button class="large-button" onclick="enterAutonomousMode()">进入自动</button>
@@ -1231,11 +1295,13 @@
     <button class="large-button" onclick="clearPathPreview()">清空选点</button>
   </div>
 
+  <div id="status-stack">
   <div id="map-status" class="status-panel">
     地图工具会生成并刷新 `autoware_init_map`；如需更新 INS 参考原点，请单独点击“同步定位原点”（使用当前机器人 GPS）。
   </div>
   <div id="runtime-status" class="status-panel">
     运行时路线通过 ADAPI 下发给 Autoware；进入自动会依次请求 AUTONOMOUS 和 Autoware control。
+  </div>
   </div>
 
   <div id="robot-panel" class="floating-panel panel-robot">
