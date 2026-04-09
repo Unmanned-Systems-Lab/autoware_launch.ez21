@@ -1,34 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="generate_autoware_map.py">
   <MetaInfo format_version="1" map_version="1"/>
-  <node id="1" lat="29.5916614095" lon="121.9870021831">
-    <tag k="local_x" v="8.8092"/>
-    <tag k="local_y" v="3.5773"/>
+  <node id="1" lat="29.5914413988" lon="121.9865659011">
+    <tag k="local_x" v="-30.7981"/>
+    <tag k="local_y" v="-24.5938"/>
     <tag k="ele" v="0"/>
   </node>
-  <node id="2" lat="29.5915599517" lon="121.9867393267">
-    <tag k="local_x" v="-16.656"/>
-    <tag k="local_y" v="-7.6688"/>
+  <node id="2" lat="29.5914170981" lon="121.9863818012">
+    <tag k="local_x" v="-48.6335"/>
+    <tag k="local_y" v="-27.2873"/>
     <tag k="ele" v="0"/>
   </node>
-  <node id="3" lat="29.5916520551" lon="121.9870069098">
-    <tag k="local_x" v="9.2671"/>
-    <tag k="local_y" v="2.5405"/>
+  <node id="3" lat="29.5914312875" lon="121.9865676483">
+    <tag k="local_x" v="-30.6288"/>
+    <tag k="local_y" v="-25.7146"/>
     <tag k="ele" v="0"/>
   </node>
-  <node id="4" lat="29.5915505974" lon="121.9867440534">
-    <tag k="local_x" v="-16.1981"/>
-    <tag k="local_y" v="-8.7057"/>
+  <node id="4" lat="29.5914069868" lon="121.9863835484">
+    <tag k="local_x" v="-48.4642"/>
+    <tag k="local_y" v="-28.4081"/>
     <tag k="ele" v="0"/>
   </node>
-  <node id="5" lat="29.5916707638" lon="121.9869974564">
-    <tag k="local_x" v="8.3513"/>
-    <tag k="local_y" v="4.6142"/>
+  <node id="5" lat="29.5914515101" lon="121.9865641539">
+    <tag k="local_x" v="-30.9673"/>
+    <tag k="local_y" v="-23.473"/>
     <tag k="ele" v="0"/>
   </node>
-  <node id="6" lat="29.5915693061" lon="121.9867345999">
-    <tag k="local_x" v="-17.1139"/>
-    <tag k="local_y" v="-6.6319"/>
+  <node id="6" lat="29.5914272094" lon="121.9863800540">
+    <tag k="local_x" v="-48.8028"/>
+    <tag k="local_y" v="-26.1666"/>
     <tag k="ele" v="0"/>
   </node>
   <way id="7">

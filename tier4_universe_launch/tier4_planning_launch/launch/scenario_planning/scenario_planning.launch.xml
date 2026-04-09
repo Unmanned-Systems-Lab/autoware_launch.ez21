@@ -16,6 +16,7 @@
       <arg name="input_route" value="/planning/mission_planning/route"/>
       <arg name="input_odometry" value="/localization/kinematic_state"/>
       <arg name="input_operation_mode_state" value="/system/operation_mode/state"/>
+      <arg name="input_force_parking" value="/planning/freespace_bypass/force_parking"/>
       <arg name="output_scenario" value="/planning/scenario_planning/scenario"/>
       <arg name="output_trajectory" value="/planning/scenario_planning/scenario_selector/trajectory"/>
       <arg name="is_parking_completed" value="/planning/scenario_planning/parking/is_completed"/>
@@ -83,6 +84,7 @@
     <group>
       <include file="$(find-pkg-share tier4_planning_launch)/launch/scenario_planning/parking.launch.xml">
         <arg name="container_type" value="component_container_mt"/>
+        <arg name="input_route_topic_name" value="/planning/freespace_bypass/route"/>
       </include>
     </group>
   </group>

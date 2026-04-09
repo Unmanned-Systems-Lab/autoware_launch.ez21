@@ -146,7 +146,7 @@ launch:
   # parking modules
   - arg:
       name: launch_parking_module
-      default: "false"
+      default: "true"
 
   # validator modules
   - arg:

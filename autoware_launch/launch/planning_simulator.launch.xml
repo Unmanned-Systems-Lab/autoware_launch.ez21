@@ -38,6 +38,11 @@
   <arg name="vehicle_simulation" default="true" description="use vehicle simulation"/>
   <!-- Auto mode setting-->
   <arg name="enable_all_modules_auto_mode" default="$(var scenario_simulation)" description="enable all module's auto mode"/>
+  <arg
+    name="launch_freespace_bypass_coordinator"
+    default="true"
+    description="switch to temporary freespace replanning when a stopped obstacle persists"
+  />
   <!-- Simulated time -->
   <arg name="use_sim_time" default="$(var scenario_simulation)"/>
   <!-- Localization-->
@@ -110,4 +115,32 @@
       <arg name="raw_vehicle_cmd_converter_param_path" value="$(find-pkg-share autoware_launch)/config/vehicle/raw_vehicle_cmd_converter/raw_vehicle_cmd_converter.param.yaml"/>
     </include>
   </group>
+
+  <node
+    if="$(var launch_freespace_bypass_coordinator)"
+    pkg="ins_driver_ez21"
+    exec="freespace_bypass_coordinator"
+    name="freespace_bypass_coordinator"
+    output="screen"
+  >
+    <param name="mission_route_topic" value="/planning/mission_planning/route"/>
+    <param name="parking_route_topic" value="/planning/freespace_bypass/route"/>
+    <param name="force_parking_topic" value="/planning/freespace_bypass/force_parking"/>
+    <param name="path_topic" value="/planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id"/>
+    <param name="objects_topic" value="/perception/object_recognition/objects"/>
+    <param name="odometry_topic" value="/localization/kinematic_state"/>
+    <param name="parking_completed_topic" value="/planning/scenario_planning/parking/is_completed"/>
+    <param name="scenario_topic" value="/planning/scenario_planning/scenario"/>
+    <param name="trigger_persistence_sec" value="5.0"/>
+    <param name="stopped_velocity_mps" value="0.05"/>
+    <param name="min_forward_object_distance_m" value="1.0"/>
+    <param name="max_forward_object_distance_m" value="20.0"/>
+    <param name="object_path_lateral_margin_m" value="2.5"/>
+    <param name="obstacle_length_padding_m" value="1.0"/>
+    <param name="rejoin_margin_after_obstacle_m" value="6.0"/>
+    <param name="min_remaining_path_after_rejoin_m" value="5.0"/>
+    <param name="goal_clearance_radius_m" value="3.0"/>
+    <param name="rejoin_arrived_distance_m" value="1.0"/>
+    <param name="timer_rate_hz" value="5.0"/>
+  </node>
 </launch>

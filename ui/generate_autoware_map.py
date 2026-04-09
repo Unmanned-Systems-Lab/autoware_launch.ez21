@@ -59,7 +59,13 @@ EZ21_VEHICLE_INFO_PATH = (
     / "src/launcher/autoware_launch/vehicle/ez21_vehicle_launch"
     / "ez21_vehicle_description/config/vehicle_info.param.yaml"
 )
-INS_DRIVER_CONFIG_PATH = AUTOWARE_ROOT / "src/sensor_component/ins_driver_ez21/config/driver.yaml"
+INS_DRIVER_SOURCE_CONFIG_PATH = (
+    AUTOWARE_ROOT / "src/sensor_component/ins_driver_ez21/config/driver.yaml"
+)
+INS_DRIVER_BUILD_CONFIG_PATH = AUTOWARE_ROOT / "build/ins_driver_ez21/config/driver.yaml"
+INS_DRIVER_INSTALL_CONFIG_PATH = (
+    AUTOWARE_ROOT / "install/ins_driver_ez21/share/ins_driver_ez21/config/driver.yaml"
+)
 DEFAULT_MAP_NAME = "autoware_init_map"
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "generated_maps"
 AUTOWARE_MAP_RELOAD_TOPIC = "/map/map_projector_info"
@@ -1408,30 +1414,103 @@ def load_active_map_origin() -> GeoPoint | None:
         return None
 
 
+def iter_ins_driver_config_paths() -> list[Path]:
+    candidates = [
+        INS_DRIVER_BUILD_CONFIG_PATH,
+        INS_DRIVER_INSTALL_CONFIG_PATH,
+        INS_DRIVER_SOURCE_CONFIG_PATH,
+    ]
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists() or candidate.parent.exists():
+            paths.append(candidate)
+    return paths
+
+
 def load_configured_ins_origin() -> GeoPoint | None:
-    if not INS_DRIVER_CONFIG_PATH.exists():
-        return None
+    for config_path in iter_ins_driver_config_paths():
+        if not config_path.exists():
+            continue
 
-    try:
-        raw_config = yaml.safe_load(INS_DRIVER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
-        parameters = raw_config.get("ins_driver_ez21", {}).get("ros__parameters", {})
-    except Exception:
-        return None
+        try:
+            raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            parameters = raw_config.get("ins_driver_ez21", {}).get("ros__parameters", {})
+        except Exception:
+            continue
 
-    if not bool(parameters.get(INS_ORIGIN_ACTIVE_PARAMETER, False)):
-        return None
+        if not bool(parameters.get(INS_ORIGIN_ACTIVE_PARAMETER, False)):
+            continue
 
-    latitude = finite_float_or_none(parameters.get(INS_ORIGIN_LATITUDE_PARAMETER))
-    longitude = finite_float_or_none(parameters.get(INS_ORIGIN_LONGITUDE_PARAMETER))
-    altitude = finite_float_or_none(parameters.get(INS_ORIGIN_ALTITUDE_PARAMETER))
-    if latitude is None or longitude is None:
-        return None
+        latitude = finite_float_or_none(parameters.get(INS_ORIGIN_LATITUDE_PARAMETER))
+        longitude = finite_float_or_none(parameters.get(INS_ORIGIN_LONGITUDE_PARAMETER))
+        altitude = finite_float_or_none(parameters.get(INS_ORIGIN_ALTITUDE_PARAMETER))
+        if latitude is None or longitude is None:
+            continue
 
-    return GeoPoint(
-        latitude=latitude,
-        longitude=longitude,
-        altitude=altitude if altitude is not None else DEFAULT_ELEVATION_M,
-    )
+        return GeoPoint(
+            latitude=latitude,
+            longitude=longitude,
+            altitude=altitude if altitude is not None else DEFAULT_ELEVATION_M,
+        )
+
+    return None
+
+
+def persist_configured_ins_origin(point: GeoPoint) -> dict[str, Any]:
+    config_paths = iter_ins_driver_config_paths()
+    if not config_paths:
+        return {
+            "status": "error",
+            "error": "no writable ins_driver_ez21 config path was found",
+        }
+
+    written_paths: list[str] = []
+    for config_path in config_paths:
+        try:
+            if config_path.exists():
+                raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            else:
+                raw_config = {}
+
+            package_config = raw_config.setdefault("ins_driver_ez21", {})
+            parameters = package_config.setdefault("ros__parameters", {})
+            parameters[INS_ORIGIN_ACTIVE_PARAMETER] = True
+            parameters[INS_ORIGIN_LATITUDE_PARAMETER] = float(point.latitude)
+            parameters[INS_ORIGIN_LONGITUDE_PARAMETER] = float(point.longitude)
+            parameters[INS_ORIGIN_ALTITUDE_PARAMETER] = float(point.altitude)
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=False),
+                encoding="utf-8",
+            )
+            written_paths.append(str(config_path))
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error": f"failed to persist INS reference origin to {config_path}: {exc}",
+                "config_files": written_paths,
+            }
+
+    return {
+        "status": "ok",
+        "message": "INS reference origin was persisted to startup config",
+        "config_files": written_paths,
+        "origin": {
+            "latitude": float(point.latitude),
+            "longitude": float(point.longitude),
+            "altitude": float(point.altitude),
+        },
+    }
 
 
 def resolve_runtime_map_dir(payload: dict[str, Any]) -> Path:
@@ -1810,19 +1889,8 @@ def build_localization_initialize_pose(
 
 def sync_origin_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     command = str(payload.get("command", "")).strip()
+    source = "payload"
     if command == "current_vehicle_gps":
-        if not INS_ORIGIN_UPDATER.is_available(timeout_s=ORIGIN_SYNC_DISCOVERY_TIMEOUT_S):
-            return {
-                "status": "error",
-                "target": "ins_origin",
-                "target_label": "INS 参考原点",
-                "error": (
-                    f"INS driver parameter service is not available on "
-                    f"{INS_DRIVER_NODE_NAME}/set_parameters_atomically"
-                ),
-                "source": INS_RAW_GPS_TOPIC,
-            }
-
         current_point = AUTOWARE_RUNTIME_CLIENT.current_raw_gps_point()
         if current_point is None:
             return {
@@ -1832,53 +1900,49 @@ def sync_origin_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "error": f"no valid raw GPS message received on {INS_RAW_GPS_TOPIC}",
                 "source": INS_RAW_GPS_TOPIC,
             }
+        first_point = current_point
+        source = INS_RAW_GPS_TOPIC
+    else:
+        ins_path_points = parse_path_points(payload, float("nan"), min_points=1)
+        first_point = ins_path_points[0]
 
-        result = INS_ORIGIN_UPDATER.update(current_point)
-        result["target"] = "ins_origin"
-        result["target_label"] = "INS 参考原点"
-        result["source"] = INS_RAW_GPS_TOPIC
-        return result
-
-    ins_path_points = parse_path_points(payload, float("nan"), min_points=1)
-    first_point = ins_path_points[0]
+    persist_result = persist_configured_ins_origin(first_point)
+    if persist_result.get("status") != "ok":
+        persist_result["target"] = "ins_origin"
+        persist_result["target_label"] = "INS 参考原点"
+        persist_result["source"] = source
+        return persist_result
 
     if INS_ORIGIN_UPDATER.is_available(timeout_s=ORIGIN_SYNC_DISCOVERY_TIMEOUT_S):
         result = INS_ORIGIN_UPDATER.update(first_point)
+        result["config_files"] = persist_result.get("config_files", [])
         result["target"] = "ins_origin"
         result["target_label"] = "INS 参考原点"
-        return result
-
-    if AUTOWARE_RUNTIME_CLIENT.is_localization_initialize_available(
-        timeout_s=ORIGIN_SYNC_DISCOVERY_TIMEOUT_S
-    ):
-        context = load_runtime_map_context(payload)
-        localization_points = parse_path_points(payload, context.elevation_m, min_points=1)
-        pose, heading_source = build_localization_initialize_pose(localization_points, context)
-        result = AUTOWARE_RUNTIME_CLIENT.initialize_localization(pose)
-        result["target"] = "localization_initialize"
-        result["target_label"] = "仿真初始位姿"
-        result["pose"] = {
-            "x": float(pose.position.x),
-            "y": float(pose.position.y),
-            "z": float(pose.position.z),
-            "orientation_z": float(pose.orientation.z),
-            "orientation_w": float(pose.orientation.w),
-        }
-        result["heading_source"] = heading_source
-        result["runtime_map"] = runtime_map_context_to_dict(context)
+        result["source"] = source
         return result
 
     return {
-        "status": "error",
-        "target": "unavailable",
-        "target_label": "定位原点/初始位姿",
-        "error": (
-            "neither the INS reference-origin update service nor the localization initialize "
-            "service is available"
+        "status": "ok",
+        "message": (
+            "INS reference origin was persisted to startup config. "
+            "The current runtime could not be updated because the parameter service is unavailable."
         ),
-        "services": {
-            "ins_origin": False,
-            "localization_initialize": False,
+        "target": "ins_origin",
+        "target_label": "INS 参考原点",
+        "source": source,
+        "node": INS_DRIVER_NODE_NAME,
+        "origin": {
+            "latitude": float(first_point.latitude),
+            "longitude": float(first_point.longitude),
+            "altitude": float(first_point.altitude),
+        },
+        "config_files": persist_result.get("config_files", []),
+        "runtime_update": {
+            "status": "skipped",
+            "error": (
+                f"INS driver parameter service is not available on "
+                f"{INS_DRIVER_NODE_NAME}/set_parameters_atomically"
+            ),
         },
     }
 

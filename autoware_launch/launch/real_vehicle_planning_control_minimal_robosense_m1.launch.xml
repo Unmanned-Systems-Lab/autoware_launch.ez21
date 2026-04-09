@@ -76,6 +76,11 @@
     default="$(find-pkg-share autoware_launch)/config/perception/object_recognition/detection/clustering/voxel_grid_based_euclidean_cluster.robosense_m1.param.yaml"
     description="voxel-grid clustering params tuned for Robosense M1"
   />
+  <arg
+    name="detected_objects_filter_method"
+    default="position_filter"
+    description="use position_filter instead of lanelet_filter for outdoor/generated-lane environments"
+  />
 
   <!-- Tools -->
   <arg name="rviz" default="true" description="launch rviz"/>
@@ -85,6 +90,11 @@
     name="launch_planning_fallback_publishers"
     default="false"
     description="publish fallback acceleration/occupancy inputs when upstream topics are stale"
+  />
+  <arg
+    name="launch_freespace_bypass_coordinator"
+    default="true"
+    description="switch to temporary freespace replanning when a stopped obstacle persists"
   />
 
   <include file="$(find-pkg-share autoware_launch)/launch/autoware.launch.xml">
@@ -188,12 +198,44 @@
     <arg name="pointcloud_container_name" value="$(var pointcloud_container_name)"/>
     <arg name="launch_pointcloud_container" value="false"/>
     <arg name="use_empty_dynamic_object_publisher" value="false"/>
+    <arg name="use_detected_to_predicted_objects_converter" value="true"/>
+    <arg name="use_detection_by_tracker" value="false"/>
     <arg name="use_traffic_light_recognition" value="$(var use_traffic_light_recognition)"/>
     <arg name="lidar_detection_model" value="clustering"/>
+    <arg name="detected_objects_filter_method" value="$(var detected_objects_filter_method)"/>
     <arg name="use_multi_channel_tracker_merger" value="false"/>
     <arg name="use_obstacle_segmentation_time_series_filter" value="false"/>
     <arg name="use_cuda_ground_segmentation" value="$(var use_cuda_ground_segmentation)"/>
     <arg name="obstacle_segmentation_ground_segmentation_param_path" value="$(var m1_ground_segmentation_param_path)"/>
     <arg name="object_recognition_detection_voxel_grid_based_euclidean_cluster_param_path" value="$(var m1_voxel_grid_based_euclidean_cluster_param_path)"/>
   </include>
+
+  <node
+    if="$(var launch_freespace_bypass_coordinator)"
+    pkg="ins_driver_ez21"
+    exec="freespace_bypass_coordinator"
+    name="freespace_bypass_coordinator"
+    output="screen"
+  >
+    <param name="mission_route_topic" value="/planning/mission_planning/route"/>
+    <param name="parking_route_topic" value="/planning/freespace_bypass/route"/>
+    <param name="force_parking_topic" value="/planning/freespace_bypass/force_parking"/>
+    <param name="path_topic" value="/planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id"/>
+    <param name="objects_topic" value="/perception/object_recognition/objects"/>
+    <param name="odometry_topic" value="/localization/kinematic_state"/>
+    <param name="parking_completed_topic" value="/planning/scenario_planning/parking/is_completed"/>
+    <param name="scenario_topic" value="/planning/scenario_planning/scenario"/>
+    <param name="trigger_persistence_sec" value="5.0"/>
+    <param name="stopped_velocity_mps" value="0.05"/>
+    <param name="min_forward_object_distance_m" value="1.0"/>
+    <param name="max_forward_object_distance_m" value="20.0"/>
+    <param name="object_path_lateral_margin_m" value="2.5"/>
+    <param name="obstacle_length_padding_m" value="1.0"/>
+    <param name="rejoin_margin_after_obstacle_m" value="6.0"/>
+    <param name="min_remaining_path_after_rejoin_m" value="5.0"/>
+    <param name="goal_clearance_radius_m" value="3.0"/>
+    <param name="rejoin_arrived_distance_m" value="1.0"/>
+    <param name="timer_rate_hz" value="5.0"/>
+  </node>
 </launch>
+
