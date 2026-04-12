@@ -7,6 +7,8 @@
     description="if true, launch pointcloud container. Please note that it is not intended to launch pointcloud_container_name with the same name in other launch files."
   />
   <arg name="pointcloud_container_name" description="name of pointcloud container"/>
+  <arg name="detection_pointcloud_container_name" default="$(var pointcloud_container_name)" description="name of detection pointcloud container"/>
+  <arg name="occupancy_grid_map_pointcloud_container_name" default="$(var pointcloud_container_name)" description="name of occupancy grid map pointcloud container"/>
   <arg name="use_sim_time" default="false"/>
   <arg name="vehicle_model" default="sample_vehicle"/>
 
@@ -48,6 +50,12 @@
   <arg name="use_obstacle_segmentation_single_frame_filter" default="false" description="use single frame filter at the ground segmentation"/>
   <arg name="use_obstacle_segmentation_time_series_filter" default="true" description="use time series filter at the ground segmentation"/>
   <arg name="use_cuda_ground_segmentation" default="false" description="use CUDA implementation for ground segmentation"/>
+  <arg name="use_obstacle_pointcloud_count_gate" default="false" description="route obstacle segmentation output through the adaptive point-count gate"/>
+  <arg name="downsample_perception_common_pointcloud" default="false" description="downsample the common perception pointcloud before obstacle segmentation and occupancy grid map"/>
+  <arg name="cuda_pointcloud_preprocessing" default="false" description="use the CUDA voxel grid downsample node for the common perception pointcloud"/>
+  <arg name="common_downsample_voxel_size_x" default="0.05" description="common perception downsample voxel size x [m]"/>
+  <arg name="common_downsample_voxel_size_y" default="0.05" description="common perception downsample voxel size y [m]"/>
+  <arg name="common_downsample_voxel_size_z" default="0.05" description="common perception downsample voxel size z [m]"/>
   <arg name="segmentation_pointcloud_fusion_camera_ids" default="[0,2,4]" description="list of camera ids used for segmentation_pointcloud_fusion node, mainly using front camera"/>
   <arg name="use_multi_channel_tracker_merger" default="true" description="if true, multi channel tracker merger is used. Otherwise, merged object is used."/>
   <arg name="tracker_publish_merged_objects" default="false"/>
@@ -66,12 +74,18 @@
     description="ground segmentation parameter file"
   />
   <arg
+    name="cuda_ground_segmentation_node_param_path"
+    default="$(find-pkg-share autoware_ground_segmentation_cuda)/config/cuda_scan_ground_segmentation_filter.param.yaml"
+    description="CUDA ground segmentation parameter file"
+  />
+  <arg
     name="object_recognition_detection_voxel_grid_based_euclidean_cluster_param_path"
     default="$(find-pkg-share autoware_launch)/config/perception/object_recognition/detection/clustering/voxel_grid_based_euclidean_cluster.param.yaml"
     description="voxel-grid euclidean clustering parameter file"
   />
   <arg name="ml_camera_lidar_merger_priority_mode" default="0" description="priority mode for ml and camera_lidar merger, options: `0: Object0`, `1: Object1`, `2: ConfidenceBased`, `3: ClassBased`"/>
   <arg name="input_pointcloud_for_traffic_light_occlusion_predictor" default="/sensing/lidar/top/pointcloud_raw_ex" description="input pointcloud topic for traffic_light_occlusion_predictor"/>
+  <arg name="input_pointcloud" default="/sensing/lidar/concatenated/pointcloud" description="input pointcloud topic for lidar perception"/>
 
   <arg
     name="camera_2d_detector/model_path"
@@ -99,6 +113,9 @@
     <arg name="vehicle_param_file" value="$(find-pkg-share $(var vehicle_model)_description)/config/vehicle_info.param.yaml"/>
 
     <arg name="pointcloud_container_name" value="$(var pointcloud_container_name)"/>
+    <arg name="detection_pointcloud_container_name" value="$(var detection_pointcloud_container_name)"/>
+    <arg name="occupancy_grid_map_pointcloud_container_name" value="$(var occupancy_grid_map_pointcloud_container_name)"/>
+    <arg name="input/pointcloud" value="$(var input_pointcloud)"/>
     <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)_occupancy_grid_map"/>
     <arg name="occupancy_grid_map_updater" value="$(var occupancy_grid_map_updater)"/>
 
@@ -120,6 +137,12 @@
     <arg name="use_obstacle_segmentation_single_frame_filter" value="$(var use_obstacle_segmentation_single_frame_filter)"/>
     <arg name="use_obstacle_segmentation_time_series_filter" value="$(var use_obstacle_segmentation_time_series_filter)"/>
     <arg name="use_cuda_ground_segmentation" value="$(var use_cuda_ground_segmentation)"/>
+    <arg name="use_obstacle_pointcloud_count_gate" value="$(var use_obstacle_pointcloud_count_gate)"/>
+    <arg name="downsample_perception_common_pointcloud" value="$(var downsample_perception_common_pointcloud)"/>
+    <arg name="cuda_pointcloud_preprocessing" value="$(var cuda_pointcloud_preprocessing)"/>
+    <arg name="common_downsample_voxel_size_x" value="$(var common_downsample_voxel_size_x)"/>
+    <arg name="common_downsample_voxel_size_y" value="$(var common_downsample_voxel_size_y)"/>
+    <arg name="common_downsample_voxel_size_z" value="$(var common_downsample_voxel_size_z)"/>
     <arg name="segmentation_pointcloud_fusion_camera_ids" value="$(var segmentation_pointcloud_fusion_camera_ids)"/>
     <arg name="use_camera_vru_detector" value="$(var use_camera_vru_detector)"/>
     <arg name="camera_vru_detector_rois_ids" value="$(var camera_vru_detector_rois_ids)"/>
@@ -259,6 +282,10 @@
     <arg
       name="obstacle_segmentation_ground_segmentation_param_path"
       value="$(var obstacle_segmentation_ground_segmentation_param_path)"
+    />
+    <arg
+      name="cuda_ground_segmentation_node_param_path"
+      value="$(var cuda_ground_segmentation_node_param_path)"
     />
     <arg
       name="obstacle_segmentation_ground_segmentation_elevation_map_param_path"

@@ -28,6 +28,10 @@
   <arg name="object_recognition_tracking_radar_tracked_object_sorter_param_path"/>
   <arg name="object_recognition_tracking_radar_tracked_object_lanelet_filter_param_path"/>
   <arg name="obstacle_segmentation_ground_segmentation_param_path"/>
+  <arg
+    name="cuda_ground_segmentation_node_param_path"
+    default="$(find-pkg-share autoware_ground_segmentation_cuda)/config/cuda_scan_ground_segmentation_filter.param.yaml"
+  />
   <arg name="obstacle_segmentation_ground_segmentation_elevation_map_param_path"/>
   <arg name="object_recognition_detection_obstacle_pointcloud_based_validator_param_path"/>
   <arg name="object_recognition_detection_detection_by_tracker_param"/>
@@ -112,6 +116,8 @@
   <arg name="camera_vru_detector_rois_ids" default="[0]" description="list of rois ids used for detecting VRU."/>
   <arg name="ml_camera_lidar_merger_priority_mode" default="0" description="priority mode for ml and camera_lidar merger, options: `0: Object0`, `1: Object1`, `2: ConfidenceBased`, `3: ClassBased`"/>
   <arg name="pointcloud_container_name" default="pointcloud_container"/>
+  <arg name="detection_pointcloud_container_name" default="$(var pointcloud_container_name)"/>
+  <arg name="occupancy_grid_map_pointcloud_container_name" default="$(var pointcloud_container_name)"/>
   <arg name="input/concatenation_info" default="/sensing/lidar/concatenated/pointcloud_info"/>
 
   <!-- Pipeline junctions -->
@@ -141,6 +147,7 @@
   <arg name="use_obstacle_segmentation_time_series_filter" description="use time series filter at the ground segmentation"/>
   <arg name="use_camera_vru_detector" default="false" description="enable pipeline for camera based VRU object detection"/>
   <arg name="use_cuda_ground_segmentation" default="false" description="use cuda ground segmentation filter at the ground segmentation"/>
+  <arg name="use_obstacle_pointcloud_count_gate" default="false" description="route obstacle segmentation output through the adaptive point-count gate"/>
 
   <!-- traffic light recognition options to switch launch function/module -->
   <arg name="use_traffic_light_recognition"/>
@@ -229,6 +236,8 @@
     </group>
 
     <!-- Object segmentation module -->
+    <let name="obstacle_segmentation_output_pointcloud" value="/perception/obstacle_segmentation/pointcloud"/>
+    <let name="obstacle_segmentation_output_pointcloud" value="/perception/obstacle_segmentation/raw_pointcloud" if="$(var use_obstacle_pointcloud_count_gate)"/>
     <group>
       <push-ros-namespace namespace="obstacle_segmentation"/>
       <include file="$(find-pkg-share tier4_perception_launch)/launch/obstacle_segmentation/ground_segmentation/ground_segmentation.launch.py">
@@ -237,7 +246,9 @@
         <arg name="use_multithread" value="true"/>
         <arg name="pointcloud_container_name" value="$(var pointcloud_container_name)"/>
         <arg name="input/pointcloud" value="$(var perception_pointcloud)"/>
+        <arg name="output/pointcloud" value="$(var obstacle_segmentation_output_pointcloud)"/>
         <arg name="obstacle_segmentation_ground_segmentation_param_path" value="$(var obstacle_segmentation_ground_segmentation_param_path)"/>
+        <arg name="cuda_ground_segmentation_node_param_path" value="$(var cuda_ground_segmentation_node_param_path)"/>
         <arg name="use_single_frame_filter" value="$(var use_obstacle_segmentation_single_frame_filter)"/>
         <arg name="use_time_series_filter" value="$(var use_obstacle_segmentation_time_series_filter)"/>
         <arg name="use_cuda_ground_segmentation" value="$(var use_cuda_ground_segmentation)"/>
@@ -256,7 +267,7 @@
         <arg name="output" value="/perception/occupancy_grid_map/map"/>
         <arg name="use_intra_process" value="true"/>
         <arg name="use_multithread" value="true"/>
-        <arg name="pointcloud_container_name" value="$(var pointcloud_container_name)"/>
+        <arg name="pointcloud_container_name" value="$(var occupancy_grid_map_pointcloud_container_name)"/>
         <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)"/>
         <arg name="occupancy_grid_map_param_path" value="$(var occupancy_grid_map_param_path)"/>
         <arg name="occupancy_grid_map_updater" value="$(var occupancy_grid_map_updater)"/>
@@ -308,7 +319,7 @@
           <arg name="input/camera8/rois" value="$(var detection_rois8)"/>
           <arg name="input/concatenation_info" value="$(var input/concatenation_info)"/>
           <arg name="input/pointcloud" value="$(var perception_pointcloud)"/>
-          <arg name="node/pointcloud_container" value="$(var pointcloud_container_name)"/>
+          <arg name="node/pointcloud_container" value="$(var detection_pointcloud_container_name)"/>
           <arg name="input/radar" value="$(var input/radar)"/>
           <arg name="sync_param_path" value="$(var object_recognition_detection_fusion_sync_param_path)"/>
           <arg name="roi_cluster_fusion_param_path" value="$(var object_recognition_detection_roi_cluster_fusion_param_path)"/>

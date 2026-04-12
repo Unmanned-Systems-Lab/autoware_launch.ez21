@@ -6,6 +6,7 @@ from launch.actions import OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def get_vehicle_info(context):
@@ -27,14 +28,26 @@ def launch_setup(context, *args, **kwargs):
     vehicle_info = get_vehicle_info(context)
 
     cuda_preprocessor_parameters = {
-        "base_frame": LaunchConfiguration("output_frame"),
-        "use_imu": False,
-        "use_3d_distortion_correction": False,
-        "enable_ring_outlier_filter": False,
-        "distance_ratio": 1.03,
-        "object_length_threshold": 0.05,
-        "processing_time_threshold_sec": 0.05,
-        "timestamp_mismatch_fraction_threshold": 0.01,
+        "base_frame": ParameterValue(LaunchConfiguration("output_frame"), value_type=str),
+        "use_imu": ParameterValue(LaunchConfiguration("use_imu"), value_type=bool),
+        "use_3d_distortion_correction": ParameterValue(
+            LaunchConfiguration("use_3d_distortion_correction"), value_type=bool
+        ),
+        "enable_ring_outlier_filter": ParameterValue(
+            LaunchConfiguration("enable_ring_outlier_filter"), value_type=bool
+        ),
+        "distance_ratio": ParameterValue(
+            LaunchConfiguration("distance_ratio"), value_type=float
+        ),
+        "object_length_threshold": ParameterValue(
+            LaunchConfiguration("object_length_threshold"), value_type=float
+        ),
+        "processing_time_threshold_sec": ParameterValue(
+            LaunchConfiguration("processing_time_threshold_sec"), value_type=float
+        ),
+        "timestamp_mismatch_fraction_threshold": ParameterValue(
+            LaunchConfiguration("timestamp_mismatch_fraction_threshold"), value_type=float
+        ),
         "crop_box.min_x": [vehicle_info["min_longitudinal_offset"]],
         "crop_box.max_x": [vehicle_info["max_longitudinal_offset"]],
         "crop_box.min_y": [vehicle_info["min_lateral_offset"]],
@@ -58,7 +71,7 @@ def launch_setup(context, *args, **kwargs):
                 ("~/output/pointcloud/cuda", [LaunchConfiguration("output_pointcloud"), "/cuda"]),
             ],
             parameters=[cuda_preprocessor_parameters],
-            extra_arguments=[],
+            extra_arguments=[{"use_intra_process_comms": False}],
         ),
     ]
 
@@ -93,7 +106,17 @@ def generate_launch_description():
                 "output_pointcloud",
                 default_value="/sensing/lidar/concatenated/pointcloud",
             ),
-            DeclareLaunchArgument("use_intra_process", default_value="true"),
+            DeclareLaunchArgument("use_imu", default_value="false"),
+            DeclareLaunchArgument("use_3d_distortion_correction", default_value="false"),
+            DeclareLaunchArgument("enable_ring_outlier_filter", default_value="false"),
+            DeclareLaunchArgument("distance_ratio", default_value="1.03"),
+            DeclareLaunchArgument("object_length_threshold", default_value="0.05"),
+            DeclareLaunchArgument("processing_time_threshold_sec", default_value="0.01"),
+            DeclareLaunchArgument(
+                "timestamp_mismatch_fraction_threshold", default_value="0.01"
+            ),
+            DeclareLaunchArgument("use_intra_process", default_value="false"),
             OpaqueFunction(function=launch_setup),
         ]
     )
+

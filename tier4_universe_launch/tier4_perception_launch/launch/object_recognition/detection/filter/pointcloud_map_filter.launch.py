@@ -47,12 +47,14 @@ class PointcloudMapFilterPipeline:
         components = []
         components.append(
             ComposableNode(
-                package="autoware_pointcloud_preprocessor",
-                plugin="autoware::pointcloud_preprocessor::ApproximateDownsampleFilterComponent",
+                package="autoware_cuda_pointcloud_preprocessor",
+                plugin="autoware::cuda_pointcloud_preprocessor::CudaVoxelGridDownsampleFilterNode",
                 name="voxel_grid_downsample_filter",
                 remappings=[
-                    ("input", LaunchConfiguration("input_topic")),
-                    ("output", LaunchConfiguration("output_topic")),
+                    ("~/input/pointcloud", LaunchConfiguration("input_topic")),
+                    ("~/input/pointcloud/cuda", [LaunchConfiguration("input_topic"), "/cuda"]),
+                    ("~/output/pointcloud", LaunchConfiguration("output_topic")),
+                    ("~/output/pointcloud/cuda", [LaunchConfiguration("output_topic"), "/cuda"]),
                 ],
                 parameters=[
                     {
@@ -61,9 +63,7 @@ class PointcloudMapFilterPipeline:
                         "voxel_size_z": self.voxel_size,
                     }
                 ],
-                extra_arguments=[
-                    {"use_intra_process_comms": LaunchConfiguration("use_intra_process")}
-                ],
+                extra_arguments=[],
             ),
         )
         return components
@@ -75,12 +75,14 @@ class PointcloudMapFilterPipeline:
         )
         components.append(
             ComposableNode(
-                package="autoware_pointcloud_preprocessor",
-                plugin="autoware::pointcloud_preprocessor::VoxelGridDownsampleFilterComponent",
+                package="autoware_cuda_pointcloud_preprocessor",
+                plugin="autoware::cuda_pointcloud_preprocessor::CudaVoxelGridDownsampleFilterNode",
                 name="voxel_grid_downsample_filter",
                 remappings=[
-                    ("input", LaunchConfiguration("input_topic")),
-                    ("output", down_sample_topic),
+                    ("~/input/pointcloud", LaunchConfiguration("input_topic")),
+                    ("~/input/pointcloud/cuda", [LaunchConfiguration("input_topic"), "/cuda"]),
+                    ("~/output/pointcloud", down_sample_topic),
+                    ("~/output/pointcloud/cuda", [down_sample_topic, "/cuda"]),
                 ],
                 parameters=[
                     {
@@ -89,9 +91,7 @@ class PointcloudMapFilterPipeline:
                         "voxel_size_z": self.voxel_size,
                     }
                 ],
-                extra_arguments=[
-                    {"use_intra_process_comms": LaunchConfiguration("use_intra_process")}
-                ],
+                extra_arguments=[],
             ),
         )
         components.append(

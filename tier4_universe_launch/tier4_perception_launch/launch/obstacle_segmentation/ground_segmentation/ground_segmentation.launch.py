@@ -43,7 +43,7 @@ class GroundSegmentationPipeline:
         self.single_frame_obstacle_seg_output = (
             "/perception/obstacle_segmentation/single_frame/pointcloud"
         )
-        self.output_topic = "/perception/obstacle_segmentation/pointcloud"
+        self.output_topic = LaunchConfiguration("output/pointcloud").perform(context)
         self.use_single_frame_filter = LaunchConfiguration("use_single_frame_filter").perform(
             context
         )
@@ -551,12 +551,12 @@ def launch_setup(context, *args, **kwargs):
                 plugin="autoware::cuda_ground_segmentation::CudaScanGroundSegmentationFilterNode",
                 name="cuda_scan_ground_segmentation_filter",
                 remappings=[
-                    ("~/input/pointcloud", "/sensing/lidar/concatenated/pointcloud"),
-                    ("~/input/pointcloud/cuda", "/sensing/lidar/concatenated/pointcloud/cuda"),
-                    ("~/output/pointcloud", "/perception/obstacle_segmentation/pointcloud"),
+                    ("~/input/pointcloud", LaunchConfiguration("input/pointcloud")),
+                    ("~/input/pointcloud/cuda", [LaunchConfiguration("input/pointcloud"), "/cuda"]),
+                    ("~/output/pointcloud", LaunchConfiguration("output/pointcloud")),
                     (
                         "~/output/pointcloud/cuda",
-                        "/perception/obstacle_segmentation/pointcloud/cuda",
+                        [LaunchConfiguration("output/pointcloud"), "/cuda"],
                     ),
                     (
                         "~/output/ground_pointcloud",
@@ -637,6 +637,7 @@ def generate_launch_description():
     add_launch_arg("use_intra_process", "True")
     add_launch_arg("pointcloud_container_name", "pointcloud_container")
     add_launch_arg("input/pointcloud", "/sensing/lidar/concatenated/pointcloud")
+    add_launch_arg("output/pointcloud", "/perception/obstacle_segmentation/pointcloud")
     add_launch_arg("use_cuda_ground_segmentation", "False")
     add_launch_arg(
         "ogm_outlier_filter_param_path",
