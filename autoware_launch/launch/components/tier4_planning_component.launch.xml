@@ -6,6 +6,9 @@
   <arg name="is_simulation" default="false"/>
   <arg name="use_sim_time" default="false"/>
   <arg name="vehicle_model" default="sample_vehicle"/>
+  <arg name="launch_manual_lane_change_handler" default="true"/>
+  <arg name="launch_planning_validator" default="true"/>
+  <arg name="launch_planning_evaluator" default="true"/>
 
   <!-- Input topic parameters for planning modules -->
   <arg name="planning_input_objects_topic_name" default="/perception/object_recognition/objects"/>
@@ -121,5 +124,8 @@
     <arg name="planning_validator_trajectory_checker_param_path" value="$(var common_config_path)/planning_validator/trajectory_checker.param.yaml"/>
     <arg name="planning_validator_intersection_collision_checker_param_path" value="$(var common_config_path)/planning_validator/intersection_collision_checker.param.yaml"/>
     <arg name="planning_validator_rear_collision_checker_param_path" value="$(var common_config_path)/planning_validator/rear_collision_checker.param.yaml"/>
+    <arg name="launch_manual_lane_change_handler" value="$(var launch_manual_lane_change_handler)"/>
+    <arg name="launch_planning_validator" value="$(var launch_planning_validator)"/>
+    <arg name="launch_planning_evaluator" value="$(var launch_planning_evaluator)"/>
   </include>
 </launch>

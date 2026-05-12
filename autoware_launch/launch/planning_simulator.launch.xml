@@ -14,9 +14,15 @@
   <!-- Map -->
   <arg name="lanelet2_map_file" default="lanelet2_map.osm" description="lanelet2 map file name"/>
   <arg name="pointcloud_map_file" default="pointcloud_map.pcd" description="pointcloud map file name"/>
+  <arg
+    name="launch_lanelet2_map_visualization"
+    default="true"
+    description="launch lanelet2 map visualization marker component"
+  />
   <let name="rviz_initial_pose_auto_fix_target" value="vector_map"/>
   <let name="gnss_initial_pose_auto_fix_target" value="vector_map"/>
   <!-- System -->
+  <arg name="launch_system" default="true" description="launch system"/>
   <arg name="launch_dummy_doors" default="true" description="launch dummy doors simulation"/>
   <arg name="launch_system_monitor" default="false" description="launch system monitor"/>
   <arg name="launch_dummy_diag_publisher" default="true" description="launch dummy diag publisher"/>
@@ -34,6 +40,12 @@
   <arg name="rviz_config" default="$(find-pkg-share autoware_launch)/rviz/$(var rviz_config_name)" description="rviz config path"/>
   <let name="rviz_respawn" value="false" if="$(var scenario_simulation)"/>
   <let name="rviz_respawn" value="true" unless="$(var scenario_simulation)"/>
+  <arg name="launch_pointcloud_container" default="true" description="launch shared pointcloud container"/>
+  <arg
+    name="launch_simulator_perception_modules"
+    default="true"
+    description="launch simulator-side perception and occupancy grid helpers"
+  />
   <!-- Vcu emulation -->
   <arg name="vehicle_simulation" default="true" description="use vehicle simulation"/>
   <!-- Auto mode setting-->
@@ -50,6 +62,34 @@
     name="localization_sim_mode"
     default="api"
     description="Select localization mode. Options are 'none', 'api' or 'pose_twist_estimator'. 'pose_twist_estimator' starts most of the localization modules except for the ndt_scan_matcher. 'api' starts an external API for initial position estimation. 'none' does not start any localization-related process."
+  />
+  <arg name="launch_api" default="true" description="launch api"/>
+  <arg name="launch_ins_driver" default="true" description="launch INS driver for localization input"/>
+  <arg name="ins_driver_param_path" default="$(find-pkg-share ins_driver_ez21)/config/driver.yaml" description="parameter file for INS driver"/>
+  <arg
+    name="launch_planning_dummy_publishers"
+    default="false"
+    description="launch empty publishers for planning-required pointcloud, occupancy grid, costmap, and objects"
+  />
+  <arg name="launch_manual_lane_change_handler" default="true" description="launch manual lane change helper"/>
+  <arg name="launch_planning_validator" default="true" description="launch planning validator"/>
+  <arg name="launch_planning_evaluator" default="true" description="launch planning evaluator"/>
+  <arg name="launch_external_cmd_selector" default="true" description="launch external command selector"/>
+  <arg name="launch_external_cmd_converter" default="true" description="launch external command converter"/>
+  <arg name="launch_lane_departure_checker" default="true" description="launch lane departure checker"/>
+  <arg name="launch_control_validator" default="true" description="launch control validator"/>
+  <arg name="launch_autonomous_emergency_braking" default="true" description="launch autonomous emergency braking"/>
+  <arg name="launch_collision_detector" default="true" description="launch collision detector"/>
+  <arg name="launch_control_evaluator" default="true" description="launch control evaluator"/>
+  <arg
+    name="launch_operation_mode_transition_manager"
+    default="true"
+    description="launch operation mode transition manager"
+  />
+  <arg
+    name="planning_dummy_publishers_param_path"
+    default="$(find-pkg-share ins_driver_ez21)/config/planning_dummy_publishers.yaml"
+    description="parameter file for planning dummy publishers"
   />
 
   <group scoped="false">
@@ -70,9 +110,28 @@
       <arg name="launch_sensing" value="false"/>
       <arg name="launch_localization" value="false"/>
       <arg name="launch_perception" value="false"/>
+      <arg name="launch_ins_driver" value="$(var launch_ins_driver)"/>
+      <arg name="ins_driver_param_path" value="$(var ins_driver_param_path)"/>
+      <arg name="launch_planning_dummy_publishers" value="$(var launch_planning_dummy_publishers)"/>
+      <arg name="launch_manual_lane_change_handler" value="$(var launch_manual_lane_change_handler)"/>
+      <arg name="launch_planning_validator" value="$(var launch_planning_validator)"/>
+      <arg name="launch_planning_evaluator" value="$(var launch_planning_evaluator)"/>
+      <arg name="launch_external_cmd_selector" value="$(var launch_external_cmd_selector)"/>
+      <arg name="launch_external_cmd_converter" value="$(var launch_external_cmd_converter)"/>
+      <arg name="launch_lane_departure_checker" value="$(var launch_lane_departure_checker)"/>
+      <arg name="launch_control_validator" value="$(var launch_control_validator)"/>
+      <arg name="launch_autonomous_emergency_braking" value="$(var launch_autonomous_emergency_braking)"/>
+      <arg name="launch_collision_detector" value="$(var launch_collision_detector)"/>
+      <arg name="launch_control_evaluator" value="$(var launch_control_evaluator)"/>
+      <arg
+        name="launch_operation_mode_transition_manager"
+        value="$(var launch_operation_mode_transition_manager)"
+      />
+      <arg name="planning_dummy_publishers_param_path" value="$(var planning_dummy_publishers_param_path)"/>
       <!-- Vehicle -->
       <arg name="launch_vehicle_interface" value="$(var launch_vehicle_interface)"/>
       <!-- System -->
+      <arg name="launch_system" value="$(var launch_system)"/>
       <arg name="system_run_mode" value="planning_simulation"/>
       <arg name="launch_system_monitor" value="$(var launch_system_monitor)"/>
       <arg name="launch_dummy_diag_publisher" value="$(var launch_dummy_diag_publisher)"/>
@@ -80,13 +139,19 @@
       <!-- Map -->
       <arg name="lanelet2_map_file" value="$(var lanelet2_map_file)"/>
       <arg name="pointcloud_map_file" value="$(var pointcloud_map_file)"/>
+      <arg
+        name="launch_lanelet2_map_visualization"
+        value="$(var launch_lanelet2_map_visualization)"
+      />
       <!-- Tools -->
       <arg name="rviz" value="$(var rviz)"/>
       <arg name="rviz_config" value="$(var rviz_config)"/>
       <arg name="rviz_respawn" value="$(var rviz_respawn)"/>
+      <arg name="launch_pointcloud_container" value="$(var launch_pointcloud_container)"/>
       <!-- Auto mode setting-->
       <arg name="enable_all_modules_auto_mode" value="$(var enable_all_modules_auto_mode)"/>
       <arg name="is_simulation" value="true"/>
+      <arg name="launch_api" value="$(var launch_api)"/>
     </include>
   </group>
 
@@ -100,6 +165,10 @@
 
     <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_simulator_component.launch.xml">
       <arg name="launch_dummy_perception" value="$(var launch_dummy_perception)"/>
+      <arg
+        name="launch_simulator_perception_modules"
+        value="$(var launch_simulator_perception_modules)"
+      />
       <arg name="launch_dummy_vehicle" value="$(var launch_dummy_vehicle)"/>
       <arg name="localization_sim_mode" value="$(var localization_sim_mode)"/>
       <arg name="launch_dummy_doors" value="$(var launch_dummy_doors)"/>
