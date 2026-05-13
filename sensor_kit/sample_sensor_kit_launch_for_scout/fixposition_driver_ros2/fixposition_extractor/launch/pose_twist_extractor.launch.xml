@@ -1,0 +1,11 @@
+<launch>
+    <!-- 启动 pose_twist_extractor 节点 -->
+    <node name="pose_twist_extractor" pkg="fixposition_extractor" exec="pose_twist_extractor" output="screen">
+    </node>
+    <node name="perception_sim" pkg="fixposition_extractor" exec="perception_sim" output="screen">
+    </node>
+    <node name="imu_to_acc" pkg="fixposition_extractor" exec="imu_to_acc" output="screen">
+    </node>
+    <!-- <node name="control_sim" pkg="fixposition_extractor" exec="control_sim" output="screen">
+    </node> -->
+</launch>

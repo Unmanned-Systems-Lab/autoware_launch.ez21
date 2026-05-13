@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <arg name="vehicle_id" default="$(env VEHICLE_ID default)"/>
+  <!-- <include file="$(find-pkg-share scout_vehicle_interface)/launch/interface_v2.launch.py">
+  </include> -->
+</launch>
